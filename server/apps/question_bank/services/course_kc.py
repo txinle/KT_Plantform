@@ -170,6 +170,49 @@ def resolve_course_kc_reference(*, course, token: str) -> CourseKCResolution:
     )
 
 
+def course_kc_has_references(concept) -> bool:
+    from apps.audit.models import AuditLog
+    from apps.experiments.models import ExperimentVersion, QuestionSnapshot
+
+    if concept.question_links.exists() or concept.experiment_sampling_rules.exists() or concept.children.exists():
+        return True
+
+    versions = ExperimentVersion.objects.filter(experiment__course_id=concept.course_id)
+    for config in versions.values_list("configuration", flat=True).iterator():
+        if any(rule.get("concept_id") == concept.pk or rule.get("kc_code") == concept.code
+               for rule in config.get("sampling_kcs", [])):
+            return True
+        if any(row.get("root_kc_code") == concept.code or concept.code in row.get("matched_kc_codes", [])
+               for row in config.get("candidate_resolution", [])):
+            return True
+
+    snapshots = QuestionSnapshot.objects.filter(version__in=versions).only(
+        "root_kc_code", "kc_mapping_snapshot", "primary_kc_id_snapshot", "all_kc_snapshots",
+        "primary_kc", "all_kcs",
+    )
+    historical_names = None
+    for snapshot in snapshots.iterator():
+        nodes = snapshot.kc_mapping_snapshot.get("nodes", [])
+        if snapshot.root_kc_code == concept.code or any(node.get("kc_code") == concept.code for node in nodes):
+            return True
+        if snapshot.primary_kc_id_snapshot == concept.pk:
+            return True
+        for entry in snapshot.all_kc_snapshots:
+            if entry.get("concept_id") == concept.pk or any(
+                level.get("concept_id") == concept.pk for level in entry.get("levels", [])
+            ):
+                return True
+        if not nodes and not snapshot.all_kc_snapshots:
+            # Older releases froze names only. Include names from audited KC renames.
+            if historical_names is None:
+                historical_names = {concept.name, *AuditLog.objects.filter(
+                    action="concept.rename", object_type="Concept", object_id=str(concept.pk),
+                ).values_list("details__old_name", flat=True)}
+            if historical_names.intersection([snapshot.primary_kc, *snapshot.all_kcs]):
+                return True
+    return False
+
+
 class CourseKCService:
     @staticmethod
     def validate_unique_name(*, course, name: str, exclude_pk=None) -> str:

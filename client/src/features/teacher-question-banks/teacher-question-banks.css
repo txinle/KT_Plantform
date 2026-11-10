@@ -61,6 +61,7 @@
 .kt-qb-main-column { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 14px; }
 .kt-qb-main-column--kc { gap: 12px; }
 .kt-qb-grid[data-panel="course-kcs"] { grid-template-columns: minmax(0, 1fr) minmax(280px, 320px); gap: 24px; }
+.kt-qb-grid[data-panel="archived-kcs"] { grid-template-columns: minmax(0, 1fr); }
 .kt-qb-side-stack { display: grid; gap: 12px; }
 
 .kt-qb-card {
@@ -411,4 +412,9 @@ input.kt-qb-visually-hidden { position: absolute; width: 1px !important; min-hei
   .kt-teacher-question-banks .kt-bank-detail-header { flex-direction: row; flex-wrap: nowrap; align-items: flex-start; }
   .kt-teacher-question-banks .kt-bank-detail-header .kt-page-header__copy { flex: 1; }
   .kt-teacher-question-banks .kt-bank-detail-header .kt-page-header__actions { width: auto; flex: 0 0 auto; justify-content: flex-end; }
+}
+
+@media (max-width: 760px) {
+  .kt-teacher-question-banks .kt-qb-kc-list .kt-qb-desktop-table { display: none; }
+  .kt-teacher-question-banks .kt-qb-kc-list .kt-qb-mobile-list .kt-qb-btn { min-height: 44px; }
 }

@@ -3443,6 +3443,7 @@ export interface components {
             actions: components["schemas"]["ManagedClassActions"];
         };
         CourseConceptCollection: {
+            can_manage: boolean;
             items: components["schemas"]["CourseConceptSummary"][];
             page: components["schemas"]["QuestionBankPageMetadata"];
             course: components["schemas"]["QuestionBankCourse"];
@@ -15019,7 +15020,9 @@ export interface operations {
         parameters: {
             query?: {
                 all?: boolean;
+                page?: number;
                 q?: string;
+                status?: "active" | "all" | "archived";
             };
             header?: never;
             path: {

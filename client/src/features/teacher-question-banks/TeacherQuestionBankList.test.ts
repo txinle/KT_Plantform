@@ -1,16 +1,18 @@
+import { ApiError } from '@/api/client'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   api: { list: vi.fn(), courseConcepts: vi.fn(), createBank: vi.fn(), createCourseConcept: vi.fn(), previewCourseConceptImport: vi.fn(), confirmCourseConceptImport: vi.fn() },
-  managementApi: { bankEditor: vi.fn(), updateBank: vi.fn(), archiveBank: vi.fn(), updateCourseConcept: vi.fn(), setCourseConceptStatus: vi.fn() },
+  managementApi: { bankEditor: vi.fn(), updateBank: vi.fn(), archiveBank: vi.fn(), updateCourseConcept: vi.fn(), setCourseConceptStatus: vi.fn(), deleteCourseConcept: vi.fn() },
   push: vi.fn(),
+  replace: vi.fn(),
   route: { params: { courseId: '7' }, query: {} as Record<string, string> },
 }))
 
 vi.mock('vue-router', () => ({
   useRoute: () => mocks.route,
-  useRouter: () => ({ push: mocks.push }),
+  useRouter: () => ({ push: mocks.push, replace: mocks.replace }),
   RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
 }))
 vi.mock('./api', () => ({ getTeacherQuestionBankApi: () => mocks.api }))
@@ -94,10 +96,11 @@ describe('TeacherQuestionBankList', () => {
       summary: { archived_count: 2, archived_banks_url: '/teacher/courses/7/banks/archived/', shared_sources_url: '/teacher/courses/7/banks/shared/' },
     })
     mocks.api.courseConcepts.mockResolvedValue({
+      can_manage: true,
       course: { id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' },
       items: [{ id: 23, kc_code: 'KC1', name: '基础运算', description: '整数四则运算', status: 'active', question_count: 2, bank_count: 1, role_counts: { level_1: 1, level_2: 1, level_3: 0 }, distribution: [{ bank_id: 11, bank_name: '演示题库', question_count: 2, detail_url: '/teacher/courses/7/banks/11/' }], can_rename: true, can_delete: true, can_archive: true, can_restore: false, rename_url: '/teacher/courses/7/concepts/23/rename/', delete_url: '/teacher/courses/7/concepts/23/delete/' }],
       page: { number: 1, size: 20, total_items: 1, total_pages: 1, start: 1, end: 1 },
-      summary: { total: 1, active: 1, used: 1, archived: 0 },
+      summary: { total: 3, active: 1, used: 1, archived: 2 },
     })
     mocks.managementApi.archiveBank.mockResolvedValue({ id: 11, visibility: 'archived' })
     mocks.managementApi.updateCourseConcept.mockResolvedValue({ id: 23, kc_code: 'KC1', name: '更新名称', description: '更新说明', status: 'active' })
@@ -114,7 +117,7 @@ describe('TeacherQuestionBankList', () => {
     expect(wrapper.find('[data-panel="course-kcs"]').exists()).toBe(false)
     expect(wrapper.get('[aria-label="课程题库"]').text()).toContain('演示题库')
     expect(wrapper.text()).toContain('演示题库')
-    expect(wrapper.text()).toContain('课程 KC 总库')
+    expect(wrapper.get('[data-tab="course-kcs"] span').text()).toBe('1')
     expect(wrapper.get('a[href="/teacher/courses/7/banks/archived/"]').text()).toBe('已归档')
     expect(wrapper.get('form[data-create-bank] input[name="name"]')).toBeTruthy()
     await wrapper.get('[data-bank-archive]').trigger('click')
@@ -132,6 +135,8 @@ describe('TeacherQuestionBankList', () => {
     expect(wrapper.get('[data-panel="course-kcs"]')).toBeTruthy()
     expect(wrapper.text()).toContain('课程 KC 总览')
     expect(wrapper.text()).toContain('课程 KC 列表')
+    expect(mocks.api.courseConcepts).toHaveBeenCalledWith(7, { status: 'active', page: 1 })
+    expect(wrapper.get('[data-archived-kcs]').attributes('href')).toContain('tab=archived-kcs')
     expect(wrapper.text()).toContain('基础运算')
     expect(wrapper.get('form[data-create-concept] input[name="sequence"]')).toBeTruthy()
     expect(wrapper.get('form[data-create-concept] input[name="name"]')).toBeTruthy()
@@ -191,13 +196,16 @@ describe('TeacherQuestionBankList', () => {
     expect(mocks.managementApi.setCourseConceptStatus).toHaveBeenCalledWith(7, 23, 'archived')
   })
   it.each(['.kt-qb-desktop-table', '.kt-qb-mobile-list'])('restores an archived KC using server capabilities from %s', async (selector) => {
-    mocks.route.query = { tab: 'course-kcs' }
+    mocks.route.query = { tab: 'archived-kcs', page: '2' }
     const collection = await mocks.api.courseConcepts()
     Object.assign(collection.items[0], { status: 'archived', can_archive: false, can_restore: true })
     mocks.api.courseConcepts.mockClear()
     mocks.api.courseConcepts.mockResolvedValue(collection)
     const wrapper = mount(TeacherQuestionBankList)
     await flushPromises()
+    expect(mocks.api.courseConcepts).toHaveBeenCalledWith(7, { status: 'archived', page: 2 })
+    expect(wrapper.get('h1').text()).toBe('已归档课程 KC')
+    expect(wrapper.find('[data-create-concept]').exists()).toBe(false)
     expect(wrapper.get(selector).find('[data-concept-archive]').exists()).toBe(false)
     await wrapper.get(selector).get('[data-concept-restore]').trigger('click')
     await flushPromises()
@@ -205,4 +213,42 @@ describe('TeacherQuestionBankList', () => {
     expect(mocks.api.courseConcepts).toHaveBeenCalledTimes(2)
   })
 
+
+  it.each([[undefined, '已永久删除'], [{ id: 23, status: 'archived' }, '已归档']])('confirms deletion and displays the server outcome', async (result, message) => {
+    mocks.route.query = { tab: 'course-kcs' }
+    mocks.managementApi.deleteCourseConcept.mockResolvedValue(result)
+    const wrapper = mount(TeacherQuestionBankList)
+    await flushPromises()
+    await wrapper.get('[data-concept-delete]').trigger('click')
+    expect(wrapper.get('dialog').text()).toContain('基础运算')
+    expect(mocks.managementApi.deleteCourseConcept).not.toHaveBeenCalled()
+    await wrapper.get('[data-confirm-concept-delete]').trigger('click')
+    await flushPromises()
+    expect(mocks.managementApi.deleteCourseConcept).toHaveBeenCalledWith(7, 23)
+    expect(wrapper.get('[role="status"]').text()).toContain(message)
+  })
+
+  it('hides delete on both layouts when the server denies it', async () => {
+    mocks.route.query = { tab: 'course-kcs' }
+    const collection = await mocks.api.courseConcepts()
+    collection.items[0].can_delete = false
+    collection.can_manage = false
+    const wrapper = mount(TeacherQuestionBankList)
+    await flushPromises()
+    expect(wrapper.find('[data-concept-delete]').exists()).toBe(false)
+    expect(wrapper.find('[data-course-kc-import]').exists()).toBe(false)
+    expect(wrapper.find('[data-create-concept]').exists()).toBe(false)
+  })
+
+  it('recovers a page emptied by the last delete without leaving a 404', async () => {
+    mocks.route.query = { tab: 'course-kcs', page: '2' }
+    const wrapper = mount(TeacherQuestionBankList)
+    await flushPromises()
+    await wrapper.get('[data-concept-delete]').trigger('click')
+    mocks.api.courseConcepts.mockRejectedValueOnce(new ApiError(404, { error: { message: '无效页面' } }))
+    await wrapper.get('[data-confirm-concept-delete]').trigger('click')
+    await flushPromises()
+    expect(mocks.replace).toHaveBeenCalledWith({ query: { tab: 'course-kcs', page: 1 } })
+    expect(wrapper.text()).not.toContain('无效页面')
+  })
 })

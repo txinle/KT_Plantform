@@ -42,6 +42,7 @@ from apps.question_bank.forms import (
 )
 from apps.question_bank.models import Concept, Question, QuestionBank
 from apps.question_bank.services.file_reader import read_uploaded_rows, read_uploaded_workbook
+from apps.question_bank.services.course_kc import course_kc_has_references
 from apps.question_bank.services.import_parsing import (
     ParsedKCMapping,
     ParsedKCNode,
@@ -1164,24 +1165,12 @@ class TeacherCourseConceptEditorView(TeacherQuestionBankManagementApiView):
         course = _course_for_teacher(request.user, course_id)
         with transaction.atomic():
             course = lock_writable_course(course)
+            if not course.can_manage(request.user, lock_teacher_link=True, capability="bank"):
+                raise PermissionDenied("当前账号不能修改该课程 KC。")
             concept = get_object_or_404(course.concepts.select_for_update(), pk=concept_id)
-            from apps.experiments.models import QuestionSnapshot
-
-            snapshot_referenced = any(
-                snapshot.root_kc_code == concept.code
-                or any(
-                    node.get("kc_code") == concept.code
-                    for node in (snapshot.kc_mapping_snapshot or {}).get("nodes", [])
-                )
-                for snapshot in QuestionSnapshot.objects.filter(
-                    version__experiment__course=course,
-                ).only("root_kc_code", "kc_mapping_snapshot")
-            )
-            if (
-                concept.question_links.exists()
-                or concept.experiment_sampling_rules.exists()
-                or snapshot_referenced
-            ):
+            if course_kc_has_references(concept):
+                if concept.status == Concept.Status.ARCHIVED:
+                    return Response({"id": concept.pk, "status": concept.status})
                 concept.status = Concept.Status.ARCHIVED
                 concept.save(update_fields=["status"])
                 log_action(
@@ -1196,7 +1185,7 @@ class TeacherCourseConceptEditorView(TeacherQuestionBankManagementApiView):
                 )
                 return Response({"id": concept.pk, "status": concept.status})
             name = concept.name
-            log_action(request, "concept.delete", concept, {"course_id": course.pk, "name": name})
+            log_action(request, "concept.delete", concept, {"course_id": course.pk, "name": name, "kc_code": concept.code})
             concept.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 

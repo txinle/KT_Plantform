@@ -12388,9 +12388,22 @@ paths:
           type: integer
         required: true
       - in: query
+        name: page
+        schema:
+          type: integer
+      - in: query
         name: q
         schema:
           type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - active
+          - all
+          - archived
+          default: active
       tags:
       - teacher
       security:
@@ -18086,6 +18099,8 @@ components:
     CourseConceptCollection:
       type: object
       properties:
+        can_manage:
+          type: boolean
         items:
           type: array
           items:
@@ -18098,6 +18113,7 @@ components:
           type: object
           additionalProperties: {}
       required:
+      - can_manage
       - course
       - items
       - page

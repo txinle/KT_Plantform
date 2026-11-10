@@ -50,9 +50,9 @@ export function createTeacherQuestionBankApi(client: ApiClient) {
         { method: 'POST', body: input },
       )
     },
-    courseConcepts(courseId: number, input: PageQuery = {}) {
+    courseConcepts(courseId: number, input: PageQuery & { status?: 'active' | 'archived' } = {}) {
       return client.get<CourseConceptCollection>(
-        `/api/v1/teacher/courses/${courseId}/concepts/${queryString({ page: input.page, q: input.query, all: input.all ? 1 : undefined })}`,
+        `/api/v1/teacher/courses/${courseId}/concepts/${queryString({ page: input.page, q: input.query, status: input.status, all: input.all ? 1 : undefined })}`,
       )
     },
     createCourseConcept(courseId: number, input: { sequence: number; name: string; description: string }) {

@@ -142,6 +142,7 @@ class CourseConceptSummarySerializer(serializers.Serializer):
 
 
 class CourseConceptCollectionSerializer(serializers.Serializer):
+    can_manage = serializers.BooleanField()
     items = CourseConceptSummarySerializer(many=True)
     page = QuestionBankPageMetadataSerializer()
     course = QuestionBankCourseSerializer()

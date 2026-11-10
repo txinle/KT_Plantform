@@ -378,12 +378,17 @@ class TeacherCourseConceptCollectionView(APIView):
         parameters=[
             OpenApiParameter("q", str, required=False),
             OpenApiParameter("all", bool, required=False),
+            OpenApiParameter("page", int, required=False),
+            OpenApiParameter("status", str, enum=[*Concept.Status.values, "all"], default="active"),
         ],
         responses=CourseConceptCollectionSerializer,
     )
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
         query = request.query_params.get("q", "").strip()
+        requested_status = request.query_params.get("status", Concept.Status.ACTIVE)
+        if requested_status not in (*Concept.Status.values, "all"):
+            raise ValidationError({"status": ["请选择有效的知识点状态。"]})
         concepts = course.concepts.annotate(
             question_count=Count("question_links", distinct=True),
             bank_count=Count("question_links__question__bank", distinct=True),
@@ -404,6 +409,8 @@ class TeacherCourseConceptCollectionView(APIView):
             ),
             kc_sequence=Cast(Substr("code", 3), IntegerField()),
         ).order_by("kc_sequence", "pk")
+        if requested_status != "all":
+            concepts = concepts.filter(status=requested_status)
         if query:
             concepts = concepts.filter(name__icontains=query)
 
@@ -451,9 +458,7 @@ class TeacherCourseConceptCollectionView(APIView):
                 "can_rename": writable,
                 "can_archive": writable and concept.status == Concept.Status.ACTIVE,
                 "can_restore": writable and concept.status == Concept.Status.ARCHIVED,
-                "can_delete": (
-                    writable
-                ),
+                "can_delete": writable,
                 "rename_url": reverse(
                     "teacher-course-concept-editor", args=[course.pk, concept.pk]
                 )
@@ -476,7 +481,7 @@ class TeacherCourseConceptCollectionView(APIView):
         return _serialize_page(
             paginator,
             items,
-            {"course": _course_payload(course), "summary": summary},
+            {"course": _course_payload(course), "can_manage": writable, "summary": summary},
         )
 
     @extend_schema(

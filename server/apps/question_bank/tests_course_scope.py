@@ -10,7 +10,7 @@ from django.urls import reverse
 from apps.accounts.forms import ClassGroupUpdateForm
 from apps.accounts.models import Course, CourseEnrollment, ClassGroup, User
 from apps.audit.models import AuditLog
-from apps.experiments.models import Experiment, ExperimentSamplingKC, ExperimentStudent
+from apps.experiments.models import Experiment, ExperimentSamplingKC, ExperimentStudent, ExperimentVersion, QuestionSnapshot
 from apps.experiments.publication_services import (
     commit_publish_plan,
     generate_preview,
@@ -364,6 +364,67 @@ class CourseQuestionBankScopeTests(TestCase):
         concept.refresh_from_db()
         self.assertEqual(concept.name, '原名称')
         self.assertFalse(Concept.objects.filter(course=self.course_a, name='并发名称').exists())
+
+    def test_course_kc_collection_filters_before_pagination_and_exposes_write_capability(self):
+        url = reverse("teacher-course-concept-collection", args=[self.course_a.pk])
+        for sequence in range(1, 23):
+            Concept.objects.create(course=self.course_a, code=f"KC{sequence}", name=f"点{sequence}",
+                                   status=Concept.Status.ACTIVE if sequence == 2 else Concept.Status.ARCHIVED)
+        active = domain_payload(self.client.get(url, {"all": "1"}))
+        self.assertEqual([item["kc_code"] for item in active["items"]], ["KC2"])
+        self.assertTrue(active["can_manage"])
+        self.assertEqual(len(domain_payload(self.client.get(url, {"all": "1", "status": "all"}))["items"]), 22)
+        archived = domain_payload(self.client.get(url, {"status": "archived", "page": 2}))
+        self.assertEqual(archived["page"]["total_items"], 21)
+        self.assertEqual(archived["summary"]["total"], 22)
+        self.assertEqual([item["kc_code"] for item in archived["items"]], ["KC22"])
+        item = archived["items"][0]
+        self.assertTrue(item["can_delete"])
+        self.assertEqual(item["delete_url"], reverse("teacher-course-concept-editor", args=[self.course_a.pk, item["id"]]))
+        self.assertEqual(self.client.get(url, {"status": "invalid"}).status_code, 400)
+        self.course_a.status = Course.Status.ARCHIVED
+        self.course_a.save(update_fields=["status"])
+        read_only = domain_payload(self.client.get(url))
+        self.assertFalse(read_only["can_manage"])
+        self.assertFalse(read_only["items"][0]["can_delete"])
+        self.assertIsNone(read_only["items"][0]["delete_url"])
+
+    def test_delete_preserves_kcs_referenced_only_by_frozen_releases(self):
+        bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="题库")
+        question = Question.objects.create(bank=bank, sequence=1, question_type=Question.Type.SHORT, text="Q", correct_answer="A")
+        experiment = Experiment.objects.create(course=self.course_a, created_by=self.teacher, question_bank=bank, name="实验")
+        legacy = Concept.objects.create(course=self.course_a, name="曾用于题目")
+        sampling = Concept.objects.create(course=self.course_a, name="曾用于抽题")
+        names_only = Concept.objects.create(course=self.course_a, name="早期名称")
+        editor = reverse("teacher-course-concept-editor", args=[self.course_a.pk, names_only.pk])
+        self.assertEqual(self.client.put(editor, {"name": "改过名称"}, content_type="application/json").status_code, 200)
+        version = ExperimentVersion.objects.create(
+            experiment=experiment, version_number=1, published_by=self.teacher,
+            configuration={"sampling_kcs": [{"concept_id": sampling.pk, "kc_code": sampling.code}]},
+        )
+        QuestionSnapshot.objects.create(
+            version=version, source_question=question, source_sequence=1, code="Q1", question_type=question.question_type,
+            text="Q", correct_answer="A", all_kc_snapshots=[{"concept_id": legacy.pk}],
+        )
+        QuestionSnapshot.objects.create(
+            version=version, source_question=question, source_sequence=2, code="Q2", question_type=question.question_type,
+            text="Q", correct_answer="A", primary_kc="早期名称", all_kcs=["早期名称"],
+        )
+        for concept in (legacy, sampling, names_only):
+            with self.subTest(kc=concept.code):
+                response = self.client.delete(reverse("teacher-course-concept-editor", args=[self.course_a.pk, concept.pk]))
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(domain_payload(response)["status"], "archived")
+                concept.refresh_from_db()
+                self.assertEqual(concept.status, Concept.Status.ARCHIVED)
+
+    def test_delete_rechecks_bank_permission_inside_course_lock(self):
+        concept = Concept.objects.create(course=self.course_a, name="受保护")
+        url = reverse("teacher-course-concept-editor", args=[self.course_a.pk, concept.pk])
+        with patch.object(Course, "can_manage", side_effect=[True, False]) as can_manage:
+            self.assertEqual(self.client.delete(url).status_code, 403)
+        self.assertEqual(can_manage.call_args.kwargs, {"capability": "bank", "lock_teacher_link": True})
+        self.assertTrue(Concept.objects.filter(pk=concept.pk).exists())
 
     def test_course_kc_search_is_normalized_limited_and_course_scoped(self):
         for index in range(24):
