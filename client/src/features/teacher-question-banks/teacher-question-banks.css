@@ -161,7 +161,8 @@
 
 .kt-qb-import-card h2 { margin-bottom: 8px; }
 .kt-qb-import-card p { margin: 0 0 18px; color: var(--kt-muted); font-size: 0.875rem; }
-.kt-qb-import-card > div { display: grid; grid-template-columns: 1fr 1.65fr; gap: 12px; }
+.kt-qb-import-actions { display: grid; grid-template-columns: 1fr 1.65fr; gap: 12px; }
+.kt-qb-import-card .kt-alert { margin-top: 8px; overflow-wrap: anywhere; }
 .kt-qb-import-card small { display: block; margin-top: 12px; color: var(--kt-muted); font-size: 0.875rem; text-align: center; }
 .kt-qb-grid[data-panel="course-kcs"] .kt-qb-form-card h2 { margin-bottom: 12px; }
 .kt-qb-grid[data-panel="course-kcs"] .kt-qb-form-card form { gap: 8px; }

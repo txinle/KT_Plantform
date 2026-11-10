@@ -147,6 +147,23 @@ describe('TeacherQuestionBankList', () => {
     expect(wrapper.get('[data-course-kc-template]').attributes('href')).toBe('/api/v1/teacher/import-templates/course-kcs.csv')
   })
 
+  it('shows the server file validation detail next to the course KC upload control', async () => {
+    mocks.route.query = { tab: 'course-kcs' }
+    mocks.api.previewCourseConceptImport.mockRejectedValueOnce(new ApiError(400, {
+      error: { code: 'VALIDATION_ERROR', message: '请求数据无效。', fields: { file: '第 168 行知识点名称重复：分析步骤' } },
+    }))
+    const wrapper = mount(TeacherQuestionBankList)
+    await flushPromises()
+    const input = wrapper.get('[data-course-kc-file]')
+    Object.defineProperty(input.element, 'files', { value: [new File([''], '电工.csv')] })
+    await input.trigger('change')
+    await flushPromises()
+    const card = wrapper.get('[data-course-kc-import]')
+    expect(card.text()).toContain('电工.csv')
+    expect(card.text()).toContain('第 168 行知识点名称重复：分析步骤')
+    expect(wrapper.text()).not.toContain('请求数据无效。')
+  })
+
   it('previews and confirms a persistent course KC import batch in place', async () => {
     mocks.route.query = { tab: 'course-kcs' }
     mocks.api.previewCourseConceptImport.mockResolvedValue({

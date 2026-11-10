@@ -64,6 +64,7 @@ const generatedCode = computed(() => Number(conceptForm.sequence) > 0 ? `KC${Num
 const importInput = ref<HTMLInputElement>()
 const importPreview = ref<CourseConceptImportPreview>()
 const importBusy = ref(false)
+const importFileError = ref('')
 const actionBusy = ref(false)
 const conceptRename = reactive({ id: 0, name: '', description: '' })
 
@@ -132,11 +133,14 @@ async function previewCourseConceptImport(event: Event) {
   const file = input.files?.[0]
   if (!file) return
   importBusy.value = true
+  importFileError.value = ''
   error.value = ''
   try {
     importPreview.value = await api.previewCourseConceptImport(courseId, file)
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : 'KC 文件校验失败。'
+    const fileDetail = caught instanceof ApiError ? caught.fields.file : undefined
+    const message = typeof fileDetail === 'string' ? fileDetail : caught instanceof Error ? caught.message : 'KC 文件校验失败。'
+    importFileError.value = `${file.name}：${message}`
   } finally {
     importBusy.value = false
     input.value = ''
@@ -366,7 +370,14 @@ watch([archived, conceptPage, conceptQuery, conceptId], ([nextArchived], [previo
           </form>
         </aside>
         <aside class="kt-qb-card kt-qb-import-card" data-course-kc-import>
-          <h2>批量导入 KC</h2><p>上传 CSV 后按序号生成 KC1、KC2...</p><div><a data-course-kc-template class="kt-qb-btn kt-qb-btn--outline" download="course_kc_template.csv" href="/api/v1/teacher/import-templates/course-kcs.csv">下载模板</a><button class="kt-qb-btn kt-qb-btn--primary" type="button" :disabled="importBusy" @click="importInput?.click()">批量导入 KC</button><input ref="importInput" data-course-kc-file class="kt-qb-visually-hidden" type="file" accept=".csv,.xlsx" @change="previewCourseConceptImport"></div><small>上传文件&nbsp; → &nbsp;校验预览&nbsp; → &nbsp;确认导入</small>
+          <h2>批量导入 KC</h2><p>上传 CSV 或 XLSX，按序号生成 KC 编码。</p>
+          <div class="kt-qb-import-actions">
+            <a data-course-kc-template class="kt-qb-btn kt-qb-btn--outline" download="course_kc_template.csv" href="/api/v1/teacher/import-templates/course-kcs.csv">下载模板</a>
+            <button class="kt-qb-btn kt-qb-btn--primary" type="button" :disabled="importBusy" @click="importInput?.click()">批量导入 KC</button>
+            <input ref="importInput" data-course-kc-file class="kt-qb-visually-hidden" type="file" accept=".csv,.xlsx" @change="previewCourseConceptImport">
+          </div>
+          <Alert v-if="importFileError" tone="danger">{{ importFileError }}</Alert>
+          <small>上传文件&nbsp; → &nbsp;校验预览&nbsp; → &nbsp;确认导入</small>
         </aside>
       </div>
     </div>
