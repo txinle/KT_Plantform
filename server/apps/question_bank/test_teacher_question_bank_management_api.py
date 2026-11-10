@@ -59,8 +59,13 @@ class TeacherQuestionBankManagementApiTests(TestCase):
             self.assertEqual(response.status_code, 200, response.content)
             self.child.refresh_from_db()
             self.assertEqual((self.child.code, self.child.name, self.child.status), ("KC2", "基础运算", target))
-            listed = self.client.get(self.course_url("concepts/"))
-            row = next(item for item in domain_payload(listed)["items"] if item["id"] == self.child.pk)
+            listings = {}
+            for status, query in (("active", {}), ("archived", {"status": "archived"})):
+                listed = self.client.get(self.course_url("concepts/"), query)
+                self.assertEqual(listed.status_code, 200, listed.content)
+                listings[status] = {item["id"]: item for item in domain_payload(listed)["items"]}
+                self.assertEqual(self.child.pk in listings[status], status == target)
+            row = listings[target][self.child.pk]
             self.assertEqual(row["can_restore"], target == "archived")
             self.assertEqual(row["can_archive"], target == "active")
 
