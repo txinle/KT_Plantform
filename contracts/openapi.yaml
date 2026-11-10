@@ -12382,6 +12382,11 @@ paths:
         name: all
         schema:
           type: boolean
+      - in: query
+        name: concept_id
+        schema:
+          type: integer
+          minimum: 1
       - in: path
         name: course_id
         schema:
@@ -12392,18 +12397,29 @@ paths:
         schema:
           type: integer
       - in: query
+        name: page_size
+        schema:
+          type: integer
+          minimum: 1
+      - in: query
         name: q
         schema:
           type: string
+        description: 按名称或 KC 编码模糊查询。
       - in: query
         name: status
         schema:
-          type: string
           enum:
           - active
-          - all
           - archived
+          - all
+          type: string
           default: active
+          minLength: 1
+        description: |-
+          * `active` - active
+          * `archived` - archived
+          * `all` - all
       tags:
       - teacher
       security:

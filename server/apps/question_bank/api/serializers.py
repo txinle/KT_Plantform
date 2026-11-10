@@ -1,6 +1,8 @@
 from drf_spectacular.utils import OpenApiTypes, extend_schema_field
 from rest_framework import serializers
 
+from apps.question_bank.models import Concept
+
 
 class FileImportRequestSerializer(serializers.Serializer):
     file = serializers.FileField()
@@ -139,6 +141,13 @@ class CourseConceptSummarySerializer(serializers.Serializer):
     can_restore = serializers.BooleanField()
     rename_url = serializers.CharField(allow_null=True)
     delete_url = serializers.CharField(allow_null=True)
+
+
+class CourseConceptQuerySerializer(serializers.Serializer):
+    q = serializers.CharField(required=False, allow_blank=True, help_text="按名称或 KC 编码模糊查询。")
+    status = serializers.ChoiceField(choices=[*Concept.Status.values, "all"], default=Concept.Status.ACTIVE)
+    concept_id = serializers.IntegerField(required=False, min_value=1)
+    page_size = serializers.IntegerField(required=False, min_value=1)
 
 
 class CourseConceptCollectionSerializer(serializers.Serializer):

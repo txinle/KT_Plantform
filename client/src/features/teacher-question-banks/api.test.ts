@@ -9,7 +9,7 @@ describe('teacher question-bank API paths', () => {
 
     await api.list(7, { page: 2, query: '代数' })
     await api.createBank(7, { name: '题库', description: '', visibility: 'private' })
-    await api.courseConcepts(7, { page: 3, query: '函数', status: 'archived' })
+    await api.courseConcepts(7, { page: 3, query: '函数', status: 'archived', pageSize: 5, conceptId: 23 })
     await api.createCourseConcept(7, { sequence: 8, name: '图论', description: '' })
     const file = new File(['序号,知识点名称\n1,图论'], 'course-kcs.csv')
     await api.previewCourseConceptImport(7, file)
@@ -29,7 +29,7 @@ describe('teacher question-bank API paths', () => {
     )
     expect(client.get).toHaveBeenNthCalledWith(
       2,
-      '/api/v1/teacher/courses/7/concepts/?page=3&q=%E5%87%BD%E6%95%B0&status=archived',
+      '/api/v1/teacher/courses/7/concepts/?page=3&q=%E5%87%BD%E6%95%B0&status=archived&page_size=5&concept_id=23',
     )
     expect(client.get).toHaveBeenNthCalledWith(
       3,

@@ -15020,9 +15020,17 @@ export interface operations {
         parameters: {
             query?: {
                 all?: boolean;
+                concept_id?: number;
                 page?: number;
+                page_size?: number;
+                /** @description 按名称或 KC 编码模糊查询。 */
                 q?: string;
-                status?: "active" | "all" | "archived";
+                /**
+                 * @description * `active` - active
+                 *     * `archived` - archived
+                 *     * `all` - all
+                 */
+                status?: "active" | "archived" | "all";
             };
             header?: never;
             path: {

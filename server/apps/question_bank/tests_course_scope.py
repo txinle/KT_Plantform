@@ -444,6 +444,27 @@ class CourseQuestionBankScopeTests(TestCase):
         self.assertTrue(all("基础知识" in item["name"] for item in payload["items"]))
         self.assertNotIn("基础知识 外部", [item["name"] for item in payload["items"]])
 
+    def test_course_kc_search_by_partial_code_and_name_and_select_exact_match(self):
+        url = reverse("teacher-course-concept-collection", args=[self.course_a.pk])
+        for sequence in range(1, 13):
+            Concept.objects.create(course=self.course_a, code=f"KC{sequence}", name=f"代数主题 {sequence}")
+        criteria = {"page_size": 5, "q": "数主"}
+        second_response = self.client.get(url, {**criteria, "page": 2})
+        self.assertEqual(second_response.status_code, 200)
+        second = domain_payload(second_response)
+        self.assertEqual(second["page"]["size"], 5)
+        self.assertEqual(second["page"]["total_pages"], 3)
+        self.assertEqual([item["kc_code"] for item in second["items"]], [f"KC{i}" for i in range(6, 11)])
+        codes = domain_payload(self.client.get(url, {"q": " kc1 ", "page_size": 5}))
+        self.assertEqual([item["kc_code"] for item in codes["items"]], ["KC1", "KC10", "KC11", "KC12"])
+        selected = codes["items"][-1]
+        exact = domain_payload(self.client.get(url, {**criteria, "concept_id": selected["id"]}))
+        self.assertEqual([item["id"] for item in exact["items"]], [selected["id"]])
+        other_course = Concept.objects.create(course=self.course_b, name="代数主题")
+        self.assertEqual(domain_payload(self.client.get(url, {"concept_id": other_course.pk}))["items"], [])
+        self.assertEqual(self.client.get(url, {"concept_id": "invalid"}).status_code, 400)
+        self.assertEqual(len(domain_payload(self.client.get(url, {**criteria, "all": 1}))["items"]), 12)
+
     def test_question_edit_saves_one_primary_and_multiple_secondary_course_kcs(self):
         bank = QuestionBank.objects.create(course=self.course_a, created_by=self.teacher, name="章节题库")
         question = Question.objects.create(

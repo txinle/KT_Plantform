@@ -133,9 +133,11 @@ describe('TeacherQuestionBankList', () => {
     expect(wrapper.get('[data-tab="course-kcs"]').classes()).toContain('is-active')
     expect(wrapper.find('[data-panel="banks"]').exists()).toBe(false)
     expect(wrapper.get('[data-panel="course-kcs"]')).toBeTruthy()
+    expect(wrapper.find('[aria-label="层级目录"]').exists()).toBe(false)
+    expect(wrapper.find('.kt-qb-titlebar').exists()).toBe(false)
     expect(wrapper.text()).toContain('课程 KC 总览')
     expect(wrapper.text()).toContain('课程 KC 列表')
-    expect(mocks.api.courseConcepts).toHaveBeenCalledWith(7, { status: 'active', page: 1 })
+    expect(mocks.api.courseConcepts).toHaveBeenCalledWith(7, { status: 'active', page: 1, pageSize: 5 })
     expect(wrapper.get('[data-archived-kcs]').attributes('href')).toContain('tab=archived-kcs')
     expect(wrapper.text()).toContain('基础运算')
     expect(wrapper.get('form[data-create-concept] input[name="sequence"]')).toBeTruthy()
@@ -203,7 +205,7 @@ describe('TeacherQuestionBankList', () => {
     mocks.api.courseConcepts.mockResolvedValue(collection)
     const wrapper = mount(TeacherQuestionBankList)
     await flushPromises()
-    expect(mocks.api.courseConcepts).toHaveBeenCalledWith(7, { status: 'archived', page: 2 })
+    expect(mocks.api.courseConcepts).toHaveBeenCalledWith(7, { status: 'archived', page: 2, pageSize: 5 })
     expect(wrapper.get('h1').text()).toBe('已归档课程 KC')
     expect(wrapper.find('[data-create-concept]').exists()).toBe(false)
     expect(wrapper.get(selector).find('[data-concept-archive]').exists()).toBe(false)
@@ -250,5 +252,47 @@ describe('TeacherQuestionBankList', () => {
     await flushPromises()
     expect(mocks.replace).toHaveBeenCalledWith({ query: { tab: 'course-kcs', page: 1 } })
     expect(wrapper.text()).not.toContain('无效页面')
+  })
+
+  it('searches across archived pages and applies a keyboard selection by identity', async () => {
+    mocks.route.query = { tab: 'archived-kcs', page: '4' }
+    const wrapper = mount(TeacherQuestionBankList)
+    await flushPromises()
+    const search = wrapper.get('[role="combobox"]')
+    await search.setValue('kc1')
+    await vi.waitFor(() => expect(wrapper.get('[role="option"]').text()).toContain('基础运算'))
+    expect(mocks.api.courseConcepts).toHaveBeenLastCalledWith(7, { query: 'kc1', status: 'archived', page: 1, pageSize: 5 })
+    await search.trigger('keydown', { key: 'ArrowDown' })
+    await search.trigger('keydown', { key: 'Enter' })
+    expect(mocks.push).toHaveBeenCalledWith({ query: { tab: 'archived-kcs', concept_id: 23, q: '基础运算' } })
+    wrapper.unmount()
+  })
+
+  it('clears an exact-match filter and returns to the whole active list', async () => {
+    mocks.route.query = { tab: 'course-kcs', q: '基础运算', concept_id: '23' }
+    const wrapper = mount(TeacherQuestionBankList)
+    await flushPromises()
+    expect(mocks.api.courseConcepts).toHaveBeenCalledWith(7, { status: 'active', page: 1, pageSize: 5, conceptId: 23 })
+    await wrapper.get('[aria-label="清除 KC 搜索"]').trigger('click')
+    expect(mocks.push).toHaveBeenCalledWith({ query: { tab: 'course-kcs' } })
+    wrapper.unmount()
+  })
+
+  it('uses the tall desktop list capacity and resets an old page on resize', async () => {
+    vi.stubGlobal('innerWidth', 1440)
+    vi.stubGlobal('innerHeight', 900)
+    mocks.route.query = { tab: 'course-kcs', page: '3' }
+    const wrapper = mount(TeacherQuestionBankList)
+    try {
+      await flushPromises()
+      expect(mocks.api.courseConcepts).toHaveBeenCalledWith(7, expect.objectContaining({ page: 3, pageSize: 7 }))
+      vi.stubGlobal('innerHeight', 1080)
+      window.dispatchEvent(new Event('resize'))
+      await flushPromises()
+      expect(mocks.replace).toHaveBeenCalledWith({ query: { tab: 'course-kcs', page: 1 } })
+    } finally {
+      wrapper.unmount()
+      vi.unstubAllGlobals()
+    }
   })
 })

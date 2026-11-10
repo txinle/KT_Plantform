@@ -46,6 +46,7 @@ from .serializers import (
     CourseConceptCreateRequestSerializer,
     CourseConceptCreateResponseSerializer,
     CourseConceptCollectionSerializer,
+    CourseConceptQuerySerializer,
     CourseKCImportResultSerializer,
     FileImportRequestSerializer,
     ImportConfirmRequestSerializer,
@@ -376,19 +377,17 @@ class TeacherQuestionBankCollectionView(APIView):
 class TeacherCourseConceptCollectionView(APIView):
     @extend_schema(
         parameters=[
-            OpenApiParameter("q", str, required=False),
+            CourseConceptQuerySerializer,
             OpenApiParameter("all", bool, required=False),
             OpenApiParameter("page", int, required=False),
-            OpenApiParameter("status", str, enum=[*Concept.Status.values, "all"], default="active"),
         ],
         responses=CourseConceptCollectionSerializer,
     )
     def get(self, request, course_id):
         course = _course_for_teacher(request.user, course_id)
-        query = request.query_params.get("q", "").strip()
-        requested_status = request.query_params.get("status", Concept.Status.ACTIVE)
-        if requested_status not in (*Concept.Status.values, "all"):
-            raise ValidationError({"status": ["请选择有效的知识点状态。"]})
+        filters = CourseConceptQuerySerializer(data=request.query_params)
+        filters.is_valid(raise_exception=True)
+        criteria = filters.validated_data
         concepts = course.concepts.annotate(
             question_count=Count("question_links", distinct=True),
             bank_count=Count("question_links__question__bank", distinct=True),
@@ -409,14 +408,18 @@ class TeacherCourseConceptCollectionView(APIView):
             ),
             kc_sequence=Cast(Substr("code", 3), IntegerField()),
         ).order_by("kc_sequence", "pk")
-        if requested_status != "all":
-            concepts = concepts.filter(status=requested_status)
-        if query:
-            concepts = concepts.filter(name__icontains=query)
+        if criteria["status"] != "all":
+            concepts = concepts.filter(status=criteria["status"])
+        if "concept_id" in criteria:
+            concepts = concepts.filter(pk=criteria["concept_id"])
+        if query := criteria.get("q"):
+            concepts = concepts.filter(Q(name__icontains=query) | Q(code__icontains=query))
 
         paginator = FixedPageNumberPagination()
         if request.query_params.get("all") == "1":
             paginator.page_size = max(1, concepts.count())
+        elif "page_size" in criteria:
+            paginator.page_size = criteria["page_size"]
         page = list(paginator.paginate_queryset(concepts, request, view=self))
         concept_ids = [concept.pk for concept in page]
         distribution = defaultdict(list)

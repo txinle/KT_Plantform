@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/client'
+import CourseConceptSearch from './CourseConceptSearch.vue'
 import Alert from '@/design-system/components/Alert.vue'
 import TeacherBankEditor from '../teacher-bank-management/TeacherBankEditor.vue'
 import ModalDialog from '@/design-system/components/ModalDialog.vue'
@@ -31,7 +32,29 @@ async function searchBanks() { currentPage.value = 1; await load() }
 async function navigateBanks(page: number) { currentPage.value = page; await load() }
 const archived = computed(() => route.query.tab === 'archived-kcs')
 const activeTab = computed(() => archived.value || route.query.tab === 'course-kcs' ? 'course-kcs' : 'banks')
+function desktopPageSize() {
+  // Desktop measurements reserve 480 CSS pixels for the shell, overview, controls and margins.
+  if (window.innerWidth < 1280) return 5
+  return Math.min(20, Math.max(5, Math.floor((window.innerHeight - 480) / 54)))
+}
+const conceptPageSize = ref(desktopPageSize())
+function resizeConceptList() {
+  const size = desktopPageSize()
+  if (size === conceptPageSize.value) return
+  conceptPageSize.value = size
+  if (activeTab.value !== 'course-kcs') return
+  if (conceptPage.value > 1) void router.replace({ query: { ...route.query, page: 1 } })
+  else void load()
+}
+onMounted(() => window.addEventListener('resize', resizeConceptList))
+onBeforeUnmount(() => window.removeEventListener('resize', resizeConceptList))
 const conceptPage = computed(() => Number(route.query.page) || 1)
+const conceptQuery = computed(() => typeof route.query.q === 'string' ? route.query.q : '')
+const conceptId = computed(() => Number(route.query.concept_id) || undefined)
+const conceptStatus = computed(() => archived.value ? 'archived' : 'active')
+function filterConcepts(query: string, id?: number) {
+  void router.push({ query: { tab: route.query.tab, ...(query ? { q: query } : {}), ...(id ? { concept_id: id } : {}) } })
+}
 const conceptToDelete = ref<CourseConceptCollection['items'][number]>()
 const notice = ref('')
 let latestLoad = 0
@@ -51,7 +74,11 @@ async function load() {
   try {
     const [bankCollection, conceptCollection] = await Promise.all([
       api.list(courseId, { page: currentPage.value, query: bankQuery.value, visibility: bankVisibility.value }),
-      api.courseConcepts(courseId, { page: conceptPage.value, status: archived.value ? 'archived' : 'active' }),
+      api.courseConcepts(courseId, {
+        page: conceptPage.value, pageSize: conceptPageSize.value, status: conceptStatus.value,
+        query: conceptId.value ? undefined : conceptQuery.value || undefined,
+        conceptId: conceptId.value,
+      }),
     ])
     if (request !== latestLoad) return
     banks.value = bankCollection
@@ -211,7 +238,7 @@ async function deleteConcept() {
   }
 }
 
-watch([archived, conceptPage], ([nextArchived], [previousArchived]) => {
+watch([archived, conceptPage, conceptQuery, conceptId], ([nextArchived], [previousArchived]) => {
   if (nextArchived !== previousArchived) notice.value = ''
   conceptToDelete.value = undefined
   conceptRename.id = 0
@@ -220,21 +247,23 @@ watch([archived, conceptPage], ([nextArchived], [previousArchived]) => {
 </script>
 
 <template>
-  <nav v-if="banks" class="kt-qb-breadcrumb" aria-label="层级目录">
+  <nav v-if="banks && activeTab === 'banks'" class="kt-qb-breadcrumb" aria-label="层级目录">
     <a href="/teacher/courses/">我的课程</a><span>/</span>
     <a :href="`/teacher/courses/${courseId}/`">{{ banks.course.name }}</a><span>/</span>
-    <strong aria-current="page">{{ archived ? '已归档课程 KC' : '题库' }}</strong>
+    <strong aria-current="page">题库</strong>
   </nav>
 
-  <header class="kt-qb-titlebar">
+  <header v-if="activeTab === 'banks'" class="kt-qb-titlebar">
     <div>
-      <h1>{{ archived ? '已归档课程 KC' : '题库' }}</h1>
-      <p v-if="!archived">管理题库内容、使用范围与知识点；原有操作完整保留。</p>
+      <h1>题库</h1>
+      <p>管理题库内容、使用范围与知识点；原有操作完整保留。</p>
     </div>
-    <div v-if="banks && activeTab === 'banks'" class="kt-qb-title-actions">
+    <div v-if="banks" class="kt-qb-title-actions">
       <button v-if="banks.course.status === 'active'" class="kt-qb-btn kt-qb-btn--primary" type="button" @click="createOpen = true">新建题库</button>
     </div>
   </header>
+
+  <h1 v-else class="kt-visually-hidden">{{ archived ? '已归档课程 KC' : '课程 KC 总库' }}</h1>
 
   <div v-if="banks && concepts" class="kt-bank-module-tabs">
     <nav class="kt-qb-tabs kt-sidebar-secondary-nav" :class="`is-${activeTab}`" role="tablist" aria-label="题库模块" aria-orientation="horizontal">
@@ -314,7 +343,8 @@ watch([archived, conceptPage], ([nextArchived], [previousArchived]) => {
 
         <section class="kt-qb-card kt-qb-kc-list" aria-labelledby="kc-list-heading">
           <div class="kt-qb-card-title">
-            <h2 id="kc-list-heading">{{ archived ? '已归档 KC 列表' : '课程 KC 列表' }}</h2><span>{{ concepts.page.total_items }} 个</span>
+            <h2 id="kc-list-heading">{{ archived ? '已归档 KC 列表' : '课程 KC 列表' }}</h2>
+            <CourseConceptSearch :course-id="courseId" :status="conceptStatus" :initial-query="conceptQuery" @filter="filterConcepts" />
             <RouterLink v-if="archived" class="kt-qb-btn kt-qb-btn--outline" :to="`/teacher/courses/${courseId}/banks/?tab=course-kcs`">返回课程 KC 总库</RouterLink>
             <RouterLink v-else data-archived-kcs class="kt-qb-btn kt-qb-btn--outline" :to="`/teacher/courses/${courseId}/banks/?tab=archived-kcs`">查看已归档 KC</RouterLink>
           </div>
@@ -326,7 +356,7 @@ watch([archived, conceptPage], ([nextArchived], [previousArchived]) => {
             </table>
           </div>
           <ul class="kt-qb-mobile-list"><li v-for="concept in concepts.items" :key="concept.id"><div><strong>{{ concept.name }}</strong><span class="kt-qb-badge" :class="concept.status === 'active' ? 'is-active' : 'is-archived'">{{ concept.status === 'active' ? '有效' : '已归档' }}</span></div><p>{{ concept.kc_code }} · {{ concept.question_count }} 道题</p><p>一级 {{ concept.role_counts.level_1 }} · 二级 {{ concept.role_counts.level_2 }} · 三级 {{ concept.role_counts.level_3 }}</p><div class="kt-qb-row-actions"><details v-if="concept.can_rename && concept.rename_url"><summary data-concept-rename class="kt-qb-btn kt-qb-btn--outline" @click="prepareConceptRename(concept)">重命名</summary><form v-if="conceptRename.id === concept.id" data-concept-rename-form class="kt-qb-popover" @submit.prevent="renameConcept(concept.id)"><label>知识点名称<input v-model="conceptRename.name" name="name" required></label><label>说明<textarea v-model="conceptRename.description" name="description" /></label><button class="kt-qb-btn kt-qb-btn--primary" type="submit" :disabled="actionBusy">保存</button></form></details><button v-if="concept.can_archive" data-concept-archive class="kt-qb-btn kt-qb-btn--outline" type="button" :disabled="actionBusy" @click="setConceptStatus(concept.id, 'archived')">归档</button><button v-if="concept.can_restore" data-concept-restore class="kt-qb-btn kt-qb-btn--outline" type="button" :disabled="actionBusy" @click="setConceptStatus(concept.id, 'active')">恢复</button><button v-if="concept.can_delete && concept.delete_url" data-concept-delete class="kt-qb-btn kt-qb-btn--outline" type="button" :disabled="actionBusy" @click="error = ''; conceptToDelete = concept">删除</button></div></li></ul>
-          <p v-if="!concepts.items.length">{{ archived ? '暂无已归档的 KC。' : '暂无有效的课程 KC。' }}</p>
+          <p v-if="!concepts.items.length">{{ conceptQuery || conceptId ? '没有匹配的课程 KC。' : archived ? '暂无已归档的 KC。' : '暂无有效的课程 KC。' }}</p>
           <Paginator :page="concepts.page.number" :total-pages="concepts.page.total_pages" @navigate="page => router.push({ query: { ...route.query, page } })" />
         </section>
       </div>
@@ -335,10 +365,10 @@ watch([archived, conceptPage], ([nextArchived], [previousArchived]) => {
         <aside class="kt-qb-card kt-qb-form-card">
           <h2>新增课程 KC</h2>
           <form data-create-concept @submit.prevent="createConcept">
-            <label>KC 序号 <span>必填</span><small>系统将根据序号自动生成唯一 KC Code</small><input v-model="conceptForm.sequence" name="sequence" type="number" min="1" step="1" placeholder="请输入正整数" required></label>
-            <label>KC Code<input :value="generatedCode" readonly></label>
+            <label>KC 序号 <span>必填</span><input v-model="conceptForm.sequence" name="sequence" type="number" min="1" step="1" placeholder="请输入正整数" required></label>
+            <label class="kt-qb-generated-code">自动生成的编码<input :value="generatedCode" readonly></label>
             <label>KC 名称 <span>必填</span><input v-model="conceptForm.name" name="name" maxlength="160" placeholder="请输入 KC 名称" required></label>
-            <label>说明（可选） <span>可选</span><textarea v-model="conceptForm.description" name="description" rows="4" placeholder="请输入说明" /></label>
+            <label>说明 <span>可选</span><textarea v-model="conceptForm.description" name="description" rows="2" placeholder="请输入说明" /></label>
             <button class="kt-qb-btn kt-qb-btn--primary" type="submit">新增 KC</button>
           </form>
         </aside>
