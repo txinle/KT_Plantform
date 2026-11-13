@@ -56,11 +56,12 @@ def validate_group_structure(group, members=None):
     if any(_get(member, 'bank_id', bank_id) != bank_id for member in members):
         errors.append('题组成员必须属于同一题库。')
     allowed_type = Question.Type.SINGLE if kind == QuestionGroup.Kind.READING else Question.Type.FILL_BLANK
-    if any(_get(member, 'question_type') != allowed_type for member in members):
+    allowed_types = {Question.Type.FILL_BLANK, Question.Type.NUMERIC} if kind == 'fill_blank' else {allowed_type}
+    if any(_get(member, 'question_type') not in allowed_types for member in members):
         errors.append('阅读题组仅支持单选题，选词和短文填空题组仅支持填空题。')
     blank_ids = [_get(member, 'blank_id', '') for member in members]
     markers = BLANK_MARKER.findall(material)
-    if kind in (QuestionGroup.Kind.CLOZE, QuestionGroup.Kind.WORDS):
+    if kind in (QuestionGroup.Kind.CLOZE, QuestionGroup.Kind.WORDS, QuestionGroup.Kind.FILL_BLANK):
         remaining = IMAGE_MARKER.sub('', BLANK_MARKER.sub('', material))
         malformed = '{{' in remaining or '}}' in remaining
         if malformed or any(not re.fullmatch(r'b[0-9]{2,}', blank or '') for blank in blank_ids) or len(set(blank_ids)) != len(blank_ids) or len(set(markers)) != len(markers) or sorted(markers) != sorted(blank_ids):
@@ -89,7 +90,7 @@ def validate_group_structure(group, members=None):
 def material_segments(group, members=None):
     members = validate_group_structure(group, members)
     material = _get(group, 'material', '')
-    if _get(group, 'kind') not in (QuestionGroup.Kind.CLOZE, QuestionGroup.Kind.WORDS):
+    if _get(group, 'kind') not in (QuestionGroup.Kind.CLOZE, QuestionGroup.Kind.WORDS, QuestionGroup.Kind.FILL_BLANK):
         return [{'kind': 'text', 'text': material}]
     lookup = {_get(member, 'blank_id'): str(_get(member, 'item_key') or _get(member, 'row_id') or _get(member, 'pk')) for member in members}
     segments, position = [], 0
@@ -128,6 +129,8 @@ def project_question_group(group, *, teacher=True, include_images=True):
         }
         if teacher:
             row.update(answer=member.correct_answer, accepted_answers=member.accepted_answers,
+                absolute_tolerance=str(member.absolute_tolerance) if member.absolute_tolerance is not None else None,
+                relative_tolerance=str(member.relative_tolerance) if member.relative_tolerance is not None else None,
                 text_match_case_sensitive=member.text_match_case_sensitive, text_match_policy_version=member.text_match_policy_version,
                 explanation=member.explanation, teacher_difficulty=member.teacher_difficulty, kc_mapping=project_question_kc_mapping(member), status=member.status)
             if group.bank.course_id is None:
@@ -200,6 +203,12 @@ def save_question_group(*, bank, data, group=None):
     for key in ('kind', 'title', 'instructions', 'material', 'content_language', 'word_bank'):
         setattr(group, key, data.get(key, getattr(group, key)))
     rows = data['members']
+    if group.kind == 'fill_blank':
+        from .multi_blank_import import blank_material
+        # The editor sends ordinary underscores, not internal blank identities.
+        if '{{b' not in group.material:
+            group.material = blank_material(group.material, len(rows))
+        rows = [{**row, 'group_order': index, 'blank_id': f'b{index:02}'} for index, row in enumerate(rows, 1)]
     ids = [row['id'] for row in rows if row.get('id') is not None]
     if len(ids) != len(set(ids)) or not set(ids) <= set(existing):
         raise ValidationError('成员题目必须属于当前题组且不能重复。')
@@ -220,6 +229,7 @@ def save_question_group(*, bank, data, group=None):
             raise ValidationError(str(error)) from error
         for field, default in (('question_type', ''), ('text', ''), ('accepted_answers', []), ('explanation', ''),
             ('max_score', Decimal('1')), ('text_match_case_sensitive', False), ('text_match_policy_version', 'text-exact-v1'),
+            ('absolute_tolerance', None), ('relative_tolerance', None),
             ('group_order', None), ('blank_id', ''), ('content_language', group.content_language), ('teacher_difficulty', None)):
             setattr(question, field, row.get(field, default))
         question.correct_answer = row.get('answer', '')

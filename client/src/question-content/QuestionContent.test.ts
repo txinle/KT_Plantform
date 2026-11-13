@@ -15,6 +15,7 @@ describe('QuestionContent', () => {
   it('keeps compact list summaries readable without exposing storage markers', () => {
     expect(questionContentSummary(`Before ${marker} after`)).toBe('Before [图片] after')
     expect(questionContentSummary('Ordinary question')).toBe('Ordinary question')
+    expect(questionContentSummary('k={{b01}}; P={{b02}} W')).toBe('k=____; P=____ W')
   })
   it('preserves text order, line breaks and cloze markers without rendering HTML', () => {
     const wrapper = mount(QuestionContent, { props: { text: `<b>First</b>\n{{b01}} ${marker} last`, images: { [key]: source } } })

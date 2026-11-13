@@ -6,7 +6,7 @@ from django.views.decorators.http import require_GET
 from apps.accounts.permissions import role_required
 from .services.import_templates import (
     QUESTION_IMAGE_EXAMPLES_FILENAME,
-    build_question_group_template,
+    build_question_group_template, build_simple_blank_template,
     build_question_image_examples_zip,
     build_question_import_template_csv,
     build_question_import_template_excel,
@@ -68,7 +68,8 @@ def question_group_import_template(request, extension):
         'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
     if extension not in content_types:
         raise Http404('不支持的模板格式')
-    return _memory_download(build_question_group_template(extension), f'question_groups_template.{extension}', content_types[extension])
+    builder = build_simple_blank_template if request.GET.get('layout') == 'blanks' else build_question_group_template
+    return _memory_download(builder(extension), f'question_groups_template.{extension}', content_types[extension])
 
 @role_required("teacher", "admin")
 @require_GET

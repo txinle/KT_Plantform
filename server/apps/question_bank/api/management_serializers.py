@@ -220,6 +220,8 @@ class QuestionGroupOptionSerializer(serializers.Serializer):
 
 
 class QuestionGroupMemberSerializer(serializers.Serializer):
+    absolute_tolerance = serializers.DecimalField(max_digits=20, decimal_places=10, min_value=0, allow_null=True, required=False)
+    relative_tolerance = serializers.DecimalField(max_digits=20, decimal_places=10, min_value=0, allow_null=True, required=False)
     images = serializers.DictField(child=serializers.CharField(), required=False, read_only=True)
     primary_concept_id = serializers.IntegerField(allow_null=True, required=False, min_value=1)
     id = serializers.IntegerField(allow_null=True, required=False)
@@ -249,7 +251,7 @@ class QuestionGroupMemberSerializer(serializers.Serializer):
 
 class QuestionGroupRequestSerializer(serializers.Serializer):
     word_bank = serializers.ListField(child=serializers.CharField(), required=False, default=list)
-    kind = serializers.ChoiceField(choices=('reading', 'cloze', 'words'))
+    kind = serializers.ChoiceField(choices=('reading', 'cloze', 'words', 'fill_blank'))
     title = serializers.CharField(max_length=240, allow_blank=True, required=False, default='')
     instructions = serializers.CharField(allow_blank=True, required=False, default='')
     material = serializers.CharField()

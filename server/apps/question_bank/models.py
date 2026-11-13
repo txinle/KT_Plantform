@@ -274,6 +274,7 @@ class QuestionGroup(models.Model):
         READING = "reading", "阅读理解"
         CLOZE = "cloze", "短文填空"
         WORDS = "words", "选词填空"
+        FILL_BLANK = "fill_blank", "填空题"
 
     bank = models.ForeignKey(QuestionBank, on_delete=models.CASCADE, related_name="groups")
     kind = models.CharField(max_length=16, choices=Kind.choices)

@@ -136,7 +136,7 @@ export interface QuestionImportPreviewGroup {
   images?: Record<string, string>
   group_id: string
   source_group_code: string
-  kind: 'reading' | 'cloze' | 'words'
+  kind: 'reading' | 'cloze' | 'words' | 'fill_blank'
   word_bank?: string[]
   title: string
   instructions: string

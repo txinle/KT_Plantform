@@ -79,6 +79,7 @@ class QuestionGroupExportTests(TestCase):
             self.assertEqual(member['题组']['材料'], 'At {{b01}}.')
             self.assertEqual(member['题组']['组内顺序'], 1)
             self.assertEqual(member['题组']['空位编号'], 'b01')
+            self.assertEqual(member['题组']['分值'], '2.50')
 
     def test_frozen_v2_materialization_remains_eight_files_after_grouped_release_added(self):
         from .services import create_export_job, claim_export_job, run_export_job

@@ -10013,6 +10013,93 @@ paths:
                       request_id:
                         type: string
           description: ''
+  /api/v1/teacher/class-tasks/{task_id}/participants/{participant_id}/return/:
+    get:
+      operationId: teacher_assignment_return_preview
+      parameters:
+      - in: path
+        name: participant_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: task_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AssignmentReturnPreview'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+    post:
+      operationId: teacher_assignment_return
+      parameters:
+      - in: path
+        name: participant_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: task_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - teacher
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignmentReturnInput'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssignmentReturnInput'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssignmentReturnInput'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AssignmentReturnResult'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/teacher/class-tasks/{task_id}/progress/:
     get:
       operationId: teacher_class_task_progress
@@ -17417,6 +17504,64 @@ components:
       - student_number
       - username
       - uses_initial_password
+    AssignmentReturnInput:
+      type: object
+      properties:
+        confirmation_token:
+          type: string
+          maxLength: 4096
+      required:
+      - confirmation_token
+    AssignmentReturnPreview:
+      type: object
+      properties:
+        participant_id:
+          type: integer
+        student_number:
+          type: string
+        display_name:
+          type: string
+        class_name:
+          type: string
+        question_count:
+          type: integer
+        submission_count:
+          type: integer
+        can_return:
+          type: boolean
+        blocked_reason:
+          type: string
+        confirmation_token:
+          type: string
+          nullable: true
+      required:
+      - blocked_reason
+      - can_return
+      - class_name
+      - confirmation_token
+      - display_name
+      - participant_id
+      - question_count
+      - student_number
+      - submission_count
+    AssignmentReturnResult:
+      type: object
+      properties:
+        participant_id:
+          type: integer
+        session_id:
+          type: integer
+        status:
+          $ref: '#/components/schemas/AssignmentReturnResultStatusEnum'
+      required:
+      - participant_id
+      - session_id
+      - status
+    AssignmentReturnResultStatusEnum:
+      enum:
+      - not_started
+      type: string
+      description: '* `not_started` - not_started'
     AtomicSubmissionCapability:
       type: object
       properties:
@@ -19540,16 +19685,18 @@ components:
         * `D` - D
         * `E` - E
         * `F` - F
-    Kind6e9Enum:
+    Kind361Enum:
       enum:
       - reading
       - cloze
       - words
+      - fill_blank
       type: string
       description: |-
         * `reading` - reading
         * `cloze` - cloze
         * `words` - words
+        * `fill_blank` - fill_blank
     KindE91Enum:
       enum:
       - standalone
@@ -22639,6 +22786,16 @@ components:
     QuestionGroupMember:
       type: object
       properties:
+        absolute_tolerance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,10})?$
+          nullable: true
+        relative_tolerance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,10})?$
+          nullable: true
         images:
           type: object
           additionalProperties:
@@ -22727,7 +22884,7 @@ components:
           items:
             type: string
         kind:
-          $ref: '#/components/schemas/Kind6e9Enum'
+          $ref: '#/components/schemas/Kind361Enum'
         title:
           type: string
           default: ''
@@ -22763,7 +22920,7 @@ components:
           items:
             type: string
         kind:
-          $ref: '#/components/schemas/Kind6e9Enum'
+          $ref: '#/components/schemas/Kind361Enum'
         title:
           type: string
           default: ''

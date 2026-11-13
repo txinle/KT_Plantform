@@ -44,9 +44,10 @@ function finishComposition(itemKey: string, event: Event) {
       <article class="kt-question-group__material" :lang="group.content_language" aria-label="共享材料">
         <h2 v-if="group.title"><QuestionContent :text="group.title" :images="group.images" /></h2>
         <div v-if="group.kind === 'words'" class="kt-question-group__word-bank" aria-label="共享词库"><span v-for="word in group.word_bank" :key="word">{{ word }}</span></div>
-        <template v-if="group.kind === 'cloze' || group.kind === 'words'">
+        <template v-if="group.kind === 'cloze' || group.kind === 'words' || group.kind === 'fill_blank'">
           <template v-for="(segment, index) in group.material_segments" :key="index">
             <QuestionContent v-if="segment.kind === 'text'" :text="segment.text" :images="group.images" />
+            <span v-else-if="group.kind === 'fill_blank'" :aria-label="`第 ${members.get(segment.item_key)?.group_order} 空`">____</span>
             <label v-else class="kt-question-group__blank" :class="{ 'is-active': activeItemKey === segment.item_key }">
               <span>{{ members.get(segment.item_key)?.group_order }}</span>
               <select v-if="group.kind === 'words'" :data-group-item="segment.item_key" :aria-label="`第 ${members.get(segment.item_key)?.group_order} 空`" :value="value(segment.item_key)" :disabled="!editable(segment.item_key)" @focus="activate(segment.item_key)" @change="change(segment.item_key, ($event.target as HTMLSelectElement).value)">
@@ -58,6 +59,16 @@ function finishComposition(itemKey: string, event: Event) {
         </template>
         <QuestionContent v-else :text="group.material" :images="group.images" />
       </article>
+      <section v-if="group.kind === 'fill_blank'" class="kt-question-group__answer-area" aria-label="作答区" data-group-answer-area>
+        <h3>作答区</h3>
+        <div v-for="member in group.members" :key="member.item_key" class="kt-question-group__answer-row">
+          <div class="kt-question-group__answer-label">
+            <label :for="`blank-answer-${group.group_id}-${member.item_key}`">第 {{ member.group_order }} 空</label>
+            <button v-if="!readonly" type="button" :data-clear-group-item="member.item_key" :aria-label="`清除第 ${member.group_order} 空`" :disabled="!editable(member.item_key) || !responsesByItemKey[member.item_key]" @click="change(member.item_key, '')">清除</button>
+          </div>
+          <input :id="`blank-answer-${group.group_id}-${member.item_key}`" :data-group-item="member.item_key" :aria-label="`第 ${member.group_order} 空`" :value="value(member.item_key)" :disabled="!editable(member.item_key)" autocomplete="off" autocapitalize="off" :spellcheck="false" @focus="activate(member.item_key)" @input="change(member.item_key, ($event.target as HTMLInputElement).value)" @compositionstart="composing.add(member.item_key)" @compositionend="finishComposition(member.item_key, $event)">
+        </div>
+      </section>
       <div v-if="group.kind === 'reading'" class="kt-question-group__questions">
         <fieldset v-for="member in group.members" :key="member.item_key" :data-group-question="member.item_key" :class="{ 'is-active': activeItemKey === member.item_key }">
           <legend class="kt-question-group__legend">小题 {{ member.group_order }}</legend>
@@ -72,6 +83,6 @@ function finishComposition(itemKey: string, event: Event) {
         </fieldset>
       </div>
     </div>
-    <div v-if="!readonly && group.kind !== 'reading'" class="kt-question-group__clear-blanks"><button v-for="member in group.members" :key="member.item_key" type="button" :data-clear-group-item="member.item_key" :disabled="!editable(member.item_key) || !responsesByItemKey[member.item_key]" @click="change(member.item_key, '')">清除第 {{ member.group_order }} 空</button></div>
+    <div v-if="!readonly && group.kind !== 'reading' && group.kind !== 'fill_blank'" class="kt-question-group__clear-blanks"><button v-for="member in group.members" :key="member.item_key" type="button" :data-clear-group-item="member.item_key" :disabled="!editable(member.item_key) || !responsesByItemKey[member.item_key]" @click="change(member.item_key, '')">清除第 {{ member.group_order }} 空</button></div>
   </section>
 </template>

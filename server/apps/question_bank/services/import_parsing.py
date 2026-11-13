@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping
 
-from .numeric import NonFiniteDecimalError, normalize_finite_decimal
+from .numeric import NonFiniteDecimalError, normalize_numeric_answer
 from .scoring import normalize_true_false_answer
 
 
@@ -354,7 +354,7 @@ def parse_question_rows(
                         accepted_answers = []
             elif question_type == "numeric":
                 try:
-                    normalize_finite_decimal(raw_answer)
+                    normalize_numeric_answer(raw_answer)
                 except ValueError:
                     if not allow_incomplete:
                         raise ValueError(f"第 {row_number} 行数值题答案必须是有效数字") from None
@@ -383,7 +383,7 @@ def parse_question_rows(
             if not raw_answer:
                 raise ValueError(f"第 {row_number} 行缺少题型，且无法根据空答案推断题型")
             try:
-                normalize_finite_decimal(raw_answer)
+                normalize_numeric_answer(raw_answer)
                 question_type = "numeric"
             except NonFiniteDecimalError:
                 raise ValueError(f"第 {row_number} 行数值题答案必须是有效数字") from None

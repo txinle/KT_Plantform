@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Iterable
 
-from .numeric import normalize_finite_decimal
+from .numeric import normalize_finite_decimal, normalize_numeric_answer
 
 
 def _normalized_text(value: Any, *, case_sensitive=False) -> str:
@@ -37,9 +37,9 @@ def _choice_set(value: Any) -> set[str]:
     return {str(item).strip().upper() for item in parts if str(item).strip()}
 
 
-def _decimal(value: Any) -> Decimal | None:
+def _decimal(value: Any, *, answer=False) -> Decimal | None:
     try:
-        return normalize_finite_decimal(value)
+        return normalize_numeric_answer(value) if answer else normalize_finite_decimal(value)
     except ValueError:
         return None
 
@@ -66,8 +66,8 @@ def score_payload(
     elif question_type == "multiple_choice":
         is_correct = bool(_choice_set(correct_answer)) and _choice_set(correct_answer) == _choice_set(submitted_answer)
     elif question_type == "numeric":
-        expected = _decimal(correct_answer)
-        observed = _decimal(submitted_answer)
+        expected = _decimal(correct_answer, answer=True)
+        observed = _decimal(submitted_answer, answer=True)
         if expected is not None and observed is not None:
             difference = abs(observed - expected)
             absolute = _decimal(absolute_tolerance)

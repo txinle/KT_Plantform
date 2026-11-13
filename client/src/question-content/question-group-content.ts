@@ -15,7 +15,7 @@ export type MaterialSegment = { kind: 'text'; text: string } | { kind: 'blank'; 
 export interface QuestionGroupView {
   images?: import('./question-content').QuestionImages
   group_id: string
-  kind: 'reading' | 'cloze' | 'words'
+  kind: 'reading' | 'cloze' | 'words' | 'fill_blank'
   word_bank?: string[]
   title: string
   instructions: string

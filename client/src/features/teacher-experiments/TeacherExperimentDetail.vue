@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import type { components } from '@/api/generated/schema'
 import ExperimentClassTaskTable from './ExperimentClassTaskTable.vue'
+import AssignmentReturnDialog from './AssignmentReturnDialog.vue'
 import { classTaskStatusLabel } from './class-task-labels'
 import Alert from '@/design-system/components/Alert.vue'
 import Button from '@/design-system/components/Button.vue'
@@ -51,6 +52,7 @@ const working = ref(false)
 const error = ref('')
 const activeTab = ref<'definition' | 'tasks' | 'collection'>('definition')
 const deletionTarget = ref<DeletionTarget>()
+const returnTask = ref<ClassTask>()
 const collection = ref<CollectionParticipantCollection>()
 const collectionLoading = ref(false)
 const collectionError = ref('')
@@ -191,6 +193,10 @@ async function clearCollectionFilters() {
   collectionPage.value = 1
   await replaceCollectionRoute(1)
   await loadCollection(1)
+}
+
+async function refreshAfterReturn() {
+  await Promise.all([loadTasks(detailRequestId), loadCollection(collectionPage.value)])
 }
 
 async function navigateCollection(page: number) {
@@ -452,7 +458,7 @@ onMounted(load)
         <p v-if="tasksLoading" role="status">正在加载班级任务…</p>
         <Alert v-else-if="tasksError" tone="danger">{{ tasksError }}</Alert>
         <EmptyState v-else-if="!tasks.length" title="暂无采集任务"><p>发布到班级后，服务端会在这里返回各任务的采集进度。</p></EmptyState>
-        <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>未开始</th><th>进行中</th><th>正常完成</th><th>已超时</th><th>已作废</th></tr></thead><tbody><tr v-for="task in tasks" :key="task.id"><td>{{ task.class_name }}</td><td>{{ classTaskStatusLabel(task.business_status) }}</td><td>{{ progress[task.id]?.total_participants ?? '—' }}</td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:not_started`" :aria-label="`${task.class_name} · 未开始 · ${progress[task.id]?.not_started ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'not_started'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'not_started')">{{ progress[task.id]?.not_started ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:in_progress`" :aria-label="`${task.class_name} · 进行中 · ${progress[task.id]?.in_progress ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'in_progress'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'in_progress')">{{ progress[task.id]?.in_progress ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:completed`" :aria-label="`${task.class_name} · 正常完成 · ${progress[task.id]?.completed ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'completed'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'completed')">{{ progress[task.id]?.completed ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:expired`" :aria-label="`${task.class_name} · 已超时 · ${progress[task.id]?.expired ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'expired'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'expired')">{{ progress[task.id]?.expired ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:invalidated`" :aria-label="`${task.class_name} · 已作废 · ${progress[task.id]?.invalidated ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'invalidated'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'invalidated')">{{ progress[task.id]?.invalidated ?? '—' }}</button></td></tr></tbody></table></div>
+        <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>班级</th><th>状态</th><th>参与者</th><th>未开始</th><th>进行中</th><th>正常完成</th><th>已超时</th><th>作业打回</th></tr></thead><tbody><tr v-for="task in tasks" :key="task.id"><td>{{ task.class_name }}</td><td>{{ classTaskStatusLabel(task.business_status) }}</td><td>{{ progress[task.id]?.total_participants ?? '—' }}</td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:not_started`" :aria-label="`${task.class_name} · 未开始 · ${progress[task.id]?.not_started ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'not_started'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'not_started')">{{ progress[task.id]?.not_started ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:in_progress`" :aria-label="`${task.class_name} · 进行中 · ${progress[task.id]?.in_progress ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'in_progress'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'in_progress')">{{ progress[task.id]?.in_progress ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:completed`" :aria-label="`${task.class_name} · 正常完成 · ${progress[task.id]?.completed ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'completed'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'completed')">{{ progress[task.id]?.completed ?? '—' }}</button></td><td><button type="button" class="kt-collection-count" :data-collection-count="`${task.id}:expired`" :aria-label="`${task.class_name} · 已超时 · ${progress[task.id]?.expired ?? 0} 人`" :aria-pressed="collectionClassId === String(task.class_id) && collectionStatus === 'expired'" :disabled="!progress[task.id] || collectionLoading" @click="selectCollectionCount(task, 'expired')">{{ progress[task.id]?.expired ?? '—' }}</button></td><td><Button :data-assignment-return="task.id" :disabled="!experiment.can_manage" @click="returnTask = task">作业打回</Button></td></tr></tbody></table></div>
       </section>
 
       <section class="kt-card kt-published-task-table" aria-labelledby="collection-participants-title" data-collection-participants>
@@ -484,6 +490,7 @@ onMounted(load)
         </template>
       </section>
     </section>
+    <AssignmentReturnDialog v-if="returnTask" :task="returnTask" :experiment-id="experimentId" @close="returnTask = undefined" @returned="refreshAfterReturn" />
     <DeletionDialog v-if="deletionTarget" :page-url="pageUrl" :course-id="courseId" :target="deletionTarget" @cancelled="deletionTarget = undefined" @completed="afterDeletion" />
   </template>
   <Alert v-else tone="danger">{{ error || '实验不存在或无法访问。' }}</Alert>

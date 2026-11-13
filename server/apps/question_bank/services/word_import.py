@@ -137,7 +137,7 @@ def _has_structured_marker(text: str) -> bool:
 
 def _is_template_preamble(text: str) -> bool:
     stripped = text.strip()
-    return stripped in (_TEMPLATE_TITLE, '英语题组导入模板', '完整题型导入模板') or stripped.startswith(("填写说明：", "填写说明:"))
+    return stripped in (_TEMPLATE_TITLE, '英语题组导入模板', '完整题型导入模板', '多空填空导入模板') or stripped.startswith(("填写说明：", "填写说明:"))
 
 
 class _QuestionRow:
@@ -188,6 +188,7 @@ class _QuestionRow:
     def as_dict(self, fallback_sequence: str) -> dict[str, object]:
         if not self.row["序号"].strip():
             self.row["序号"] = fallback_sequence
+            self.row["_generated_sequence"] = True
         self.row["_location"] = "；".join(self.locations)
         return self.row
 
@@ -450,12 +451,16 @@ def read_docx_rows(uploaded_file, *, image_files=()) -> list[dict[str, object]]:
             if header_fields is not None:
                 header_cells = block.rows[0].cells
                 headers = [_cell_text(cell).strip() for cell in header_cells]
+                break_before = True
                 for row_number, row in enumerate(block.rows[1:], start=2):
                     values = [_cell_text(cell) for cell in row.cells]
                     if not any(value.strip() for value in values):
+                        break_before = True
                         continue
                     location = f"表格{block_number}第{row_number}行"
                     question = start_question(location)
+                    question.row["_break_before"] = break_before
+                    break_before = False
                     for column_number, cell in enumerate(header_cells, start=1):
                         _add_unsupported_object_errors(
                             question,

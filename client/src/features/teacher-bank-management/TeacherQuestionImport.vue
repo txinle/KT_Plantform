@@ -74,7 +74,7 @@ const rows = computed<QuestionImportPreviewRow[]>(() => [
   ...groups.value.map(group => ({ row_id: `group:${group.group_id}`, group_id: group.group_id,
     sequence: Math.min(...allRows.value.filter(row => group.member_row_ids.includes(row.row_id)).map(row => row.sequence)),
     title: group.title, instructions: group.instructions, text: group.material, images: group.images, question_type: group.kind,
-    question_type_label: ({ reading: '阅读理解', words: '选词填空', cloze: '短文填空' })[group.kind],
+    question_type_label: ({ reading: '阅读理解', words: '选词填空', cloze: '短文填空', fill_blank: '填空题' })[group.kind],
     max_score: group.total_max_score, source_label: group.source_group_code, option_count: 0,
     teacher_difficulty: null, options: [], answer: `${group.item_count} 个作答项`, accepted_answers: [], explanation: '',
     kc_mapping: null, classification: group.classification, errors: group.errors })),
@@ -332,6 +332,7 @@ watch([filter, search, questionType, pageSize], () => { page.value = 1 })
 
       <div class="kt-import-flow"><span>01 选择文件</span><span>→</span><span>02 校验预览</span><span>→</span><span>03 确认导入</span></div><section class="qimp-file kt-site-import-upload" aria-label="题库文件">
         <div class="kt-site-import-controls"><label>目标题库<input :value="bankName" aria-label="目标题库" readonly></label><label>文件格式<select id="question-import-format" v-model="format"><option value="spreadsheet">Excel / CSV</option><option value="docx">Word .docx</option></select></label><button class="qimp-button is-primary" type="button" :disabled="busy" @click="fileInput?.click()">{{ busy ? '正在校验…' : preview ? '重新选择文件' : '选择文件并预览' }}</button></div>
+        <div class="kt-site-import-templates"><span>多空填空简明模板：</span><a href="/api/v1/teacher/import-templates/question-groups.xlsx?layout=blanks" download>Excel</a><a href="/api/v1/teacher/import-templates/question-groups.csv?layout=blanks" download>CSV</a><a href="/api/v1/teacher/import-templates/question-groups.docx?layout=blanks" download>Word</a><span>首行写题干，后续每空一行，只填答案和分值；知识点可沿用首行。</span></div>
         <div class="kt-site-import-templates"><span>下载全题型模板：</span><a data-question-template="xlsx" href="/api/v1/teacher/import-templates/question-groups.xlsx" download="question_import_template.xlsx">Excel</a><a data-question-template="csv" href="/api/v1/teacher/import-templates/question-groups.csv" download="question_import_template.csv">CSV</a><a data-question-template="docx" href="/api/v1/teacher/import-templates/question-groups.docx" download="question_import_template.docx">Word</a><span>11 种题型 · 12 道完整题目 · 22 个作答项</span><span v-if="uploadedFile" data-file-summary>{{ uploadedFile.name }} · {{ fileSize }} · {{ uploadTime }}</span></div>
         <p class="kt-picker-note">可同时选择一个题库文件及其中引用的图片。CSV 使用 <code v-pre>{{image:文件名.png}}</code> 引用同名图片。</p>
         <a href="/api/v1/teacher/import-templates/question-images.zip" download>下载配套图片示例 ZIP</a>

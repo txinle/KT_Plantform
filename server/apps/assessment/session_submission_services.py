@@ -21,7 +21,7 @@ from config.capture_timing import pending_timing
 from apps.analytics.research_materialization_jobs import coalesce_session_materializations
 from apps.experiments.models import QuestionSnapshot
 from apps.question_bank.services.scoring import score_payload
-from apps.question_bank.services.numeric import normalize_finite_decimal
+from apps.question_bank.services.numeric import normalize_numeric_answer
 from .deadline_services import DeadlineDecisionService
 from .event_batch_services import ProcessRequestError, parse_uuid, require_exact_mapping
 from .models import Attempt, ConfidenceAssignment, ExperimentSession, ResponseSnapshot
@@ -356,7 +356,7 @@ def run_session_submission(claimed_job):
                     snapshot = attempt.assignment.snapshot
                     try:
                         if snapshot.question_type == 'numeric':
-                            normalize_finite_decimal(answer)
+                            normalize_numeric_answer(answer)
                         correct, score = score_payload(snapshot.question_type, snapshot.correct_answer, answer,
                             accepted_answers=snapshot.accepted_answers, absolute_tolerance=snapshot.absolute_tolerance,
                             relative_tolerance=snapshot.relative_tolerance,

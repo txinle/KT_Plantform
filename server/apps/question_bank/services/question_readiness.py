@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from ..models import Question
-from .numeric import normalize_finite_decimal
+from .numeric import normalize_finite_decimal, normalize_numeric_answer
 from .scoring import normalize_true_false_answer
 
 
@@ -34,7 +34,7 @@ def content_issues(content, *, question_name="题目"):
         issues.append(f"{question_name} 的教学题型与作答规则不匹配")
     option_values = content.get("options") or {}
     options = {str(key).upper() for key in option_values}
-    if not _has_text(content.get("text")) and not (kind == Question.Type.FILL_BLANK and content.get('valid_cloze_context')):
+    if not _has_text(content.get("text")) and not (kind in (Question.Type.FILL_BLANK, Question.Type.NUMERIC) and content.get('valid_cloze_context')):
         issues.append(f"{question_name} 的题干不能为空")
     if len(options) != len(option_values):
         issues.append(f"{question_name} 的选项编号不能重复")
@@ -51,7 +51,7 @@ def content_issues(content, *, question_name="题目"):
             issues.append(f"{question_name} 的多选题答案必须对应至少两个已有选项")
     elif kind == Question.Type.NUMERIC:
         try:
-            normalize_finite_decimal(answer)
+            normalize_numeric_answer(answer)
         except ValueError:
             issues.append(f"{question_name} 的数值题答案必须是有效数字")
     elif kind in {Question.Type.SHORT, Question.Type.FILL_BLANK}:
@@ -89,7 +89,7 @@ def content_issues(content, *, question_name="题目"):
 
 def _content(question):
     valid_cloze_context = False
-    if question.group_id and question.group.kind in ('cloze', 'words'):
+    if question.group_id and question.group.kind in ('cloze', 'words', 'fill_blank'):
         from .question_groups import validate_group_structure
         try:
             validate_group_structure(question.group)

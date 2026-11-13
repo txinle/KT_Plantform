@@ -81,19 +81,24 @@ def read_unified_rows(uploaded, *, allow_legacy=False, image_files=()):
     while headers and not headers[-1]:
         headers.pop()
     valid_headers = [set(HEADERS), set(GROUP_HEADERS), set(GROUP_HEADERS) - {"共享词库", "绝对误差容限", "相对误差容限"}]
+    if {'题目', '题型', '答案'} <= set(headers) <= set(GROUP_HEADERS):
+        valid_headers.append(set(headers))
     if allow_legacy:
         valid_headers.extend(set(variant) for variant in LEGACY_HEADER_VARIANTS)
     if len(headers) != len(set(headers)) or set(headers) not in valid_headers:
         raise ValueError(f'表头必须完整且不重复：{"、".join(HEADERS)}（题目也可写为题干，列可调整顺序）。')
     rows = []
+    break_before = False
     for number, values, errors in data[1:]:
         if not errors and not any(value is not None and str(value).strip() for value in values):
+            break_before = True
             continue
         if any(value is not None and str(value).strip() for value in values[len(headers):]):
             errors = [*errors, '存在没有对应表头的数据列。']
         values = [*values, *([''] * max(0, len(headers) - len(values)))]
-        rows.append({**dict(zip(headers, values)), '_location': location.format(number=number), '_errors': errors,
+        rows.append({**dict(zip(headers, values)), '_location': location.format(number=number), '_errors': errors, '_break_before': break_before,
                      '_legacy_standalone': allow_legacy and set(headers) not in (set(GROUP_HEADERS), set(GROUP_HEADERS) - {'共享词库', '绝对误差容限', '相对误差容限'})})
+        break_before = False
     if not rows:
         raise ValueError('文件中没有可导入的题目。')
     return stage_image_references(rows, assets=image_assets, image_files=image_files)

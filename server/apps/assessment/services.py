@@ -18,7 +18,7 @@ from apps.experiments.models import (
 )
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.experiments.services import derive_session_seeds, ordered_snapshots, select_snapshots
-from apps.question_bank.services.numeric import normalize_finite_decimal
+from apps.question_bank.services.numeric import normalize_numeric_answer
 from apps.question_bank.services.scoring import score_payload
 from .event_services import append_assessment_event
 from .confidence_services import (
@@ -323,7 +323,7 @@ def _auto_submit_saved_attempt_for_deadline(session, attempt, *, terminal_at):
         answer_valid = True
         if snapshot.question_type == "numeric":
             try:
-                normalize_finite_decimal(attempt.draft_answer)
+                normalize_numeric_answer(attempt.draft_answer)
             except ValueError:
                 answer_valid = False
         if answer_valid:
@@ -1553,7 +1553,7 @@ def _submit_attempt_transaction(
     snapshot = attempt.assignment.snapshot
     if snapshot.question_type == "numeric":
         try:
-            normalize_finite_decimal(attempt.draft_answer)
+            normalize_numeric_answer(attempt.draft_answer)
         except ValueError:
             raise SubmissionValidationError(
                 "数值题答案必须是有效数字",

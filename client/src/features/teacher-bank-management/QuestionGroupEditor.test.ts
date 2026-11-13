@@ -54,3 +54,19 @@ it('saves all members with the fetched revision and preserves entered values on 
   expect(wrapper.text()).toContain('题组已被其他编辑修改')
   expect(wrapper.get<HTMLInputElement>('[data-group-max-score]').element.value).toBe('3.50')
 })
+
+
+it('edits multi-blank questions with plain underscores and per-blank scoring', async () => {
+  api.save.mockClear()
+  api.get.mockResolvedValue({ id: 3, kind: 'fill_blank', title: '', instructions: '', material: 'k={{b01}}; P={{b02}} W.', content_language: 'zh-CN', revision: 4,
+    members: [1, 2].map(n => ({ id: n, item_key: String(n), group_order: n, blank_id: `b0${n}`, question_type: 'numeric', text: '', options: [], answer: n === 1 ? '-1/2' : '6', accepted_answers: [], explanation: '', max_score: n === 1 ? '2.00' : '1.00', text_match_case_sensitive: false })) })
+  api.save.mockRejectedValue(new Error('test save'))
+  const wrapper = mount(QuestionGroupEditor, { props: { bankId: 2, groupId: 3 } })
+  await flushPromises()
+  expect(wrapper.get<HTMLTextAreaElement>('.kt-group-editor__material').element.value).toBe('k=____; P=____ W.')
+  expect(wrapper.text()).not.toContain('空位编号')
+  expect(wrapper.findAll('.kt-group-editor__preview input[data-group-item]')).toHaveLength(2)
+  await wrapper.get('form').trigger('submit')
+  await flushPromises()
+  expect(api.save).toHaveBeenCalledWith(3, expect.objectContaining({ kind: 'fill_blank', material: 'k=____; P=____ W.', members: [expect.objectContaining({ max_score: '2.00', question_type: 'numeric' }), expect.objectContaining({ max_score: '1.00' })] }))
+})

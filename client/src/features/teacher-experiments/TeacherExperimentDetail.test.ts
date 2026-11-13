@@ -565,7 +565,7 @@ describe('TeacherExperimentDetail', () => {
     expect(mocks.api.collectionParticipants).toHaveBeenCalledWith(11, { page: 1 })
     const summary = wrapper.get('[data-collection-summary]')
     expect(summary.findAll('thead th').map((cell) => cell.text())).toEqual([
-      '班级', '状态', '参与者', '未开始', '进行中', '正常完成', '已超时', '已作废',
+      '班级', '状态', '参与者', '未开始', '进行中', '正常完成', '已超时', '作业打回',
     ])
     const summaryCells = summary.get('tbody tr').findAll('td')
     expect(summaryCells[2]?.text()).toBe('15')
@@ -573,7 +573,8 @@ describe('TeacherExperimentDetail', () => {
     expect(summaryCells[4]?.text()).toBe('2')
     expect(summaryCells[5]?.text()).toBe('3')
     expect(summaryCells[6]?.text()).toBe('4')
-    expect(summaryCells[7]?.text()).toBe('5')
+    expect(summaryCells[7]?.text()).toBe('作业打回')
+    expect(summaryCells[7]?.find('[data-assignment-return="31"]').exists()).toBe(true)
 
     const desktop = wrapper.get('.kt-desktop-only')
     const mobile = wrapper.get('.kt-mobile-only')

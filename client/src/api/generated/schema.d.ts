@@ -1445,6 +1445,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teacher/class-tasks/{task_id}/participants/{participant_id}/return/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["teacher_assignment_return_preview"];
+        put?: never;
+        post: operations["teacher_assignment_return"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teacher/class-tasks/{task_id}/progress/": {
         parameters: {
             query?: never;
@@ -3178,6 +3194,30 @@ export interface components {
             research_consent_required: boolean;
             research_consent_version: string;
         };
+        AssignmentReturnInput: {
+            confirmation_token: string;
+        };
+        AssignmentReturnPreview: {
+            participant_id: number;
+            student_number: string;
+            display_name: string;
+            class_name: string;
+            question_count: number;
+            submission_count: number;
+            can_return: boolean;
+            blocked_reason: string;
+            confirmation_token: string | null;
+        };
+        AssignmentReturnResult: {
+            participant_id: number;
+            session_id: number;
+            status: components["schemas"]["AssignmentReturnResultStatusEnum"];
+        };
+        /**
+         * @description * `not_started` - not_started
+         * @enum {string}
+         */
+        AssignmentReturnResultStatusEnum: "not_started";
         AtomicSubmissionCapability: {
             enabled: boolean;
             mutation_receipts?: boolean;
@@ -3976,9 +4016,10 @@ export interface components {
          * @description * `reading` - reading
          *     * `cloze` - cloze
          *     * `words` - words
+         *     * `fill_blank` - fill_blank
          * @enum {string}
          */
-        Kind6e9Enum: "reading" | "cloze" | "words";
+        Kind361Enum: "reading" | "cloze" | "words" | "fill_blank";
         /**
          * @description * `standalone` - standalone
          *     * `canonical` - canonical
@@ -5120,6 +5161,10 @@ export interface components {
             images?: string[];
         };
         QuestionGroupMember: {
+            /** Format: decimal */
+            absolute_tolerance?: string | null;
+            /** Format: decimal */
+            relative_tolerance?: string | null;
             readonly images: {
                 [key: string]: string;
             };
@@ -5159,7 +5204,7 @@ export interface components {
         };
         QuestionGroupRequest: {
             word_bank?: string[];
-            kind: components["schemas"]["Kind6e9Enum"];
+            kind: components["schemas"]["Kind361Enum"];
             /** @default  */
             title: string;
             /** @default  */
@@ -5174,7 +5219,7 @@ export interface components {
         };
         QuestionGroupResponse: {
             word_bank?: string[];
-            kind: components["schemas"]["Kind6e9Enum"];
+            kind: components["schemas"]["Kind361Enum"];
             /** @default  */
             title: string;
             /** @default  */
@@ -13401,6 +13446,66 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["ClassTask"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_assignment_return_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                participant_id: number;
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AssignmentReturnPreview"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    teacher_assignment_return: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                participant_id: number;
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssignmentReturnInput"];
+                "application/x-www-form-urlencoded": components["schemas"]["AssignmentReturnInput"];
+                "multipart/form-data": components["schemas"]["AssignmentReturnInput"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AssignmentReturnResult"];
                         meta: {
                             request_id: string;
                         };

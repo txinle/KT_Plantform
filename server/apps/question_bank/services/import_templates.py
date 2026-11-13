@@ -321,6 +321,65 @@ def question_group_template_rows():
     }} for example in examples]
 
 
+def build_simple_blank_template(extension):
+    headers = ('题型', '题目', '答案', '分值', '可接受答案', '解析', '一级知识点', '二级知识点', '三级知识点')
+    rows = [
+        ('填空题', '两个端口功率之和为零，U2=2U1、I2=kI1，则k=____；端口1功率为-6 W时，端口2功率为____ W。', '-1/2', '2', '', '1+2k=0。', 'KC1', '', ''),
+        ('', '', '6', '1', '', '两个端口功率之和为零。', '', '', ''),
+    ]
+    instructions = ('填写说明：新题填写题型和题干；同题后续空紧接下一行，只填本空答案、分值、解析或知识点，题型和题干留空。'
+                    '每个空用至少三个下划线表示，不合并单元格，不用填写题组编号。空白行会中断续行。'
+                    '续行知识点全部留空时沿用首行；分值留空按每空1分。可接受答案仅用于本空的同义写法，以分号分隔。'
+                    '纯数值答案按数值比较，支持分数与小数等价，其他答案按文本匹配；导入前核对预览。')
+    output = BytesIO()
+    if extension == 'csv':
+        stream = StringIO(newline='')
+        writer = csv.writer(stream)
+        writer.writerow(headers)
+        writer.writerows(rows)
+        return stream.getvalue().encode('utf-8-sig')
+    if extension == 'xlsx':
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = '题目'
+        sheet.append(headers)
+        for row in rows:
+            sheet.append(row)
+        sheet.freeze_panes = 'A2'
+        for row in sheet:
+            for cell in row:
+                cell.number_format = '@'
+                cell.alignment = Alignment(wrap_text=True, vertical='top')
+        sheet.column_dimensions['B'].width = 65
+        for column in ('A', 'C', 'D', 'E', 'F', 'G', 'H', 'I'):
+            sheet.column_dimensions[column].width = 18
+        sheet['B1'].comment = Comment(instructions, 'KT Data Lab')
+        notes = workbook.create_sheet('填写说明')
+        notes.append([instructions])
+        notes.append([KC_TEMPLATE_INSTRUCTION])
+        notes.column_dimensions['A'].width = 90
+        for row in notes:
+            row[0].alignment = Alignment(wrap_text=True)
+        workbook.save(output)
+        workbook.close()
+    elif extension == 'docx':
+        document = Document()
+        document.add_paragraph('多空填空导入模板', style='Title')
+        document.add_paragraph(instructions)
+        document.add_paragraph('填写说明：' + KC_TEMPLATE_INSTRUCTION)
+        table = document.add_table(rows=1, cols=len(headers))
+        table.style = 'Table Grid'
+        for cell, value in zip(table.rows[0].cells, headers):
+            cell.text = value
+        for row in rows:
+            for cell, value in zip(table.add_row().cells, row):
+                cell.text = value
+        document.save(output)
+    else:
+        raise ValueError('不支持的模板格式。')
+    return output.getvalue()
+
+
 def build_question_group_template(extension):
     from .unified_reader import GROUP_HEADERS
     rows = _image_example_rows(question_group_template_rows())

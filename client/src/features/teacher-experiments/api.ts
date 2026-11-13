@@ -60,6 +60,7 @@ export type PublishOperationJob = components['schemas']['PublishOperationJob']
 export type PublishParticipantCollection = components['schemas']['PublishParticipantCollection']
 export type PublishParticipantDetail = components['schemas']['PublishParticipantDetail']
 export type CollectionParticipantCollection = components['schemas']['CollectionParticipantCollection']
+export type AssignmentReturnPreview = components['schemas']['AssignmentReturnPreview']
 export type CollectionParticipantFilters = {
   classId?: number
   status?: string
@@ -276,6 +277,14 @@ export function createTeacherExperimentApi(client: ApiClient) {
       return client.get<ClassTaskCollection>(
         `/api/v1/teacher/experiments/${experimentId}/class-tasks/`,
       )
+    },
+    previewReturn(taskId: number, participantId: number) {
+      return client.get<AssignmentReturnPreview>(`/api/v1/teacher/class-tasks/${taskId}/participants/${participantId}/return/`)
+    },
+    returnAssignment(taskId: number, participantId: number, confirmationToken: string) {
+      return client.mutate<components['schemas']['AssignmentReturnResult']>(
+        `/api/v1/teacher/class-tasks/${taskId}/participants/${participantId}/return/`,
+        { method: 'POST', body: { confirmation_token: confirmationToken } })
     },
     task(taskId: number) {
       return client.get<ClassTask>(`/api/v1/teacher/class-tasks/${taskId}/`)

@@ -347,7 +347,7 @@ def _prepare_groups(bank, rows):
         else:
             group['material_segments'] = material_segments(group, structural_members)
             for row in members:
-                row['content']['valid_cloze_context'] = group['kind'] in ('cloze', 'words')
+                row['content']['valid_cloze_context'] = group['kind'] in ('cloze', 'words', 'fill_blank')
                 row['content_errors'] = content_issues(row['content'])
                 row['errors'] = [*row['content_errors'], *row['mapping_errors']]
             fingerprint = _group_fingerprint(group, members)
@@ -375,6 +375,8 @@ class UnifiedQuestionImportService:
         raw_bytes = uploaded.read()
         uploaded.seek(0)
         source = read_unified_rows(uploaded, allow_legacy=bank.course_id is None, image_files=image_files)
+        from .multi_blank_import import expand_blank_rows
+        source = expand_blank_rows(source)
         assets = {key: uri for raw in source for key, uri in raw.get("_image_assets", {}).items()}
         legacy_sequences = None
         if bank.course_id is None and any(raw.get('_legacy_standalone') for raw in source):

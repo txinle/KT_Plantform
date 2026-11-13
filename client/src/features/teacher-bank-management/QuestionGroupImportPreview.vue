@@ -43,12 +43,12 @@ const labels = { ready: '导入后可用', draft: '保存为草稿', invalid: '�
       <ul v-if="!student && active.errors.length" role="alert"><li v-for="issue in active.errors" :key="issue">{{ issue }}</li></ul>
       <QuestionGroupContent v-if="student" :group="view" :responses-by-item-key="responses" @request-activate="intent => { if (intent.hasAnswer) responses[intent.itemKey] = intent.answer }" @answer-change="change => responses[change.itemKey] = change.answer" />
       <template v-else>
-        <h3>{{ active.title }}</h3><p v-if="active.word_bank?.length">共享词库：{{ active.word_bank.join(' · ') }}</p><p class="qimp-groups__material" :lang="active.content_language"><QuestionContent :text="active.material" :images="active.images" /></p>
+        <h3>{{ active.title }}</h3><p v-if="active.word_bank?.length">共享词库：{{ active.word_bank.join(' · ') }}</p><p class="qimp-groups__material" :lang="active.content_language"><QuestionContent :text="active.kind === 'fill_blank' ? active.material.replace(/\{\{b[0-9]{2,}\}\}/g, '____') : active.material" :images="active.images" /></p>
         <section v-for="row in groupRows" :key="row.row_id" class="qimp-groups__member">
           <h4>{{ row.group_order }}. <QuestionContent :text="row.text || `第 ${row.group_order} 空`" :images="{ ...active.images, ...row.images }" /> <small>{{ row.max_score || '1.00' }} 分</small></h4>
           <p v-for="option in row.options" :key="option.key">{{ option.key }}. <QuestionContent :text="option.text" :images="{ ...active.images, ...row.images }" option /></p>
           <p>答案：<QuestionContent :text="String(row.answer ?? '')" :images="{ ...active.images, ...row.images }" /><span v-if="row.accepted_answers?.length">；可接受：{{ row.accepted_answers.join('；') }}</span></p>
-          <p>匹配：{{ row.text_match_case_sensitive ? '区分大小写' : '忽略大小写' }}，归一化空白</p>
+          <p v-if="row.question_type === 'numeric'">匹配：数值比较，支持分数与小数等价；单位按题干填写。</p><p v-else>匹配：{{ row.text_match_case_sensitive ? '区分大小写' : '忽略大小写' }}，归一化空白</p>
           <p v-if="row.explanation">解析：<QuestionContent :text="row.explanation" :images="{ ...active.images, ...row.images }" /></p>
           <p v-if="row.kc_mapping">KC：{{ row.kc_mapping.nodes.map(node => node.kc_code).join('、') }}</p>
           <p v-if="row.source_label">来源：{{ row.source_label }}</p>

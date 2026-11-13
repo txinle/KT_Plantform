@@ -1,6 +1,7 @@
 from django.urls import include, path
 
 from .student_preview_views import TeacherStudentPreviewView
+from .assignment_return_views import TeacherAssignmentReturnView
 from .archive_views import TeacherExperimentArchiveView, TeacherExperimentRestoreView
 from .deletion_views import (
     TeacherClassExperimentRemoveView,
@@ -184,6 +185,11 @@ urlpatterns = [
         "class-tasks/<int:task_id>/progress/",
         TeacherClassTaskProgressView.as_view(),
         name="teacher-class-task-progress",
+    ),
+    path(
+        "class-tasks/<int:task_id>/participants/<int:participant_id>/return/",
+        TeacherAssignmentReturnView.as_view(),
+        name="teacher-assignment-return",
     ),
     path(
         "class-tasks/<int:task_id>/grading/",

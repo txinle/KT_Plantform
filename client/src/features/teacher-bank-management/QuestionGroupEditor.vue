@@ -11,21 +11,23 @@ const props = defineProps<{ bankId: number; courseId?: number; groupId?: number;
 const emit = defineEmits<{ saved: []; close: []; convert: [kind: string, document: GroupEditorDocument] }>()
 const api = getQuestionGroupApi(props.bankId, props.courseId)
 const draft = ref<GroupEditorDocument>({ id: 0, revision: 0, kind: 'reading', title: '', instructions: '', material: '', word_bank: [], material_segments: [], content_language: 'en', members: [] })
-const kindLabel = computed(() => ({ reading: '阅读理解', words: '选词填空', cloze: '短文填空' })[draft.value.kind])
+const kindLabel = computed(() => ({ reading: '阅读理解', words: '选词填空', cloze: '短文填空', fill_blank: '填空题' })[draft.value.kind])
 const previewScore = computed(() => draft.value.members.reduce((sum, member) => sum + (Number(member.max_score) || 0), 0).toFixed(2))
 const previewResponses = ref<Record<string, unknown>>({})
 const preview = computed<QuestionGroupView>(() => {
   const segments: MaterialSegment[] = []
   let cursor = 0
-  for (const match of draft.value.material.matchAll(/\{\{(b[0-9]{2,})\}\}/g)) {
+  let blankOrder = 0
+  const material = draft.value.kind === 'fill_blank' ? draft.value.material.replace(/_{3,}|＿{3,}/g, () => `{{b${String(++blankOrder).padStart(2, '0')}}}`) : draft.value.material
+  for (const match of material.matchAll(/\{\{(b[0-9]{2,})\}\}/g)) {
     const start = match.index || 0
-    if (start > cursor) segments.push({ kind: 'text', text: draft.value.material.slice(cursor, start) })
+    if (start > cursor) segments.push({ kind: 'text', text: material.slice(cursor, start) })
     const member = draft.value.members.find(item => item.blank_id === match[1])
     if (member) segments.push({ kind: 'blank', blank_id: match[1]!, item_key: member.item_key })
     else segments.push({ kind: 'text', text: match[0] })
     cursor = start + match[0].length
   }
-  if (cursor < draft.value.material.length) segments.push({ kind: 'text', text: draft.value.material.slice(cursor) })
+  if (cursor < material.length) segments.push({ kind: 'text', text: material.slice(cursor) })
   return { ...draft.value, group_id: String(draft.value.id), material_segments: segments, members: draft.value.members.map(member => ({ ...member, options: member.options.filter(option => option.text.trim()) })) }
 })
 const originalKind = ref('')
@@ -33,7 +35,7 @@ const saveAsNew = computed(() => Boolean(props.groupId && originalKind.value && 
 const confirmConversion = ref(false)
 function changeKind(event: Event) {
   const kind = (event.target as HTMLSelectElement).value
-  if (!['reading', 'words', 'cloze'].includes(kind)) { emit('convert', kind, draft.value); return }
+  if (!['reading', 'words', 'cloze', 'fill_blank'].includes(kind)) { emit('convert', kind, draft.value); return }
   draft.value.kind = kind as GroupEditorDocument['kind']
   draft.value.members.forEach((member, index) => {
     member.question_type = kind === 'reading' ? 'single_choice' : 'fill_blank'
@@ -51,6 +53,7 @@ const removedIds = computed(() => originalIds.value.filter(id => !draft.value.me
 
 function adopt(document: GroupEditorDocument) {
   draft.value = JSON.parse(JSON.stringify(document)) as GroupEditorDocument
+  if (draft.value.kind === 'fill_blank') draft.value.material = draft.value.material.replace(/\{\{b[0-9]{2,}\}\}/g, '____')
   if (draft.value.kind === 'reading') draft.value.members.forEach(member => {
     member.options = 'ABCDEF'.split('').map(key => ({ key, text: member.options.find(option => option.key === key)?.text || '' }))
   })
@@ -81,7 +84,7 @@ function addMember() {
 }
 function removeMember(index: number) {
   draft.value.members.splice(index, 1)
-  draft.value.members.forEach((member, position) => { member.group_order = position + 1 })
+  draft.value.members.forEach((member, position) => { member.group_order = position + 1; if (draft.value.kind === 'fill_blank') member.blank_id = `b${String(position + 1).padStart(2, '0')}` })
 }
 function memberPayload(member: GroupEditorMember) {
   return { id: saveAsNew.value ? null : member.id ?? null, group_order: member.group_order, blank_id: member.blank_id,
@@ -90,6 +93,7 @@ function memberPayload(member: GroupEditorMember) {
     accepted_answers: member.accepted_answers, explanation: member.explanation, max_score: member.max_score || '1.00',
     content_language: draft.value.content_language, text_match_case_sensitive: member.text_match_case_sensitive,
     text_match_policy_version: 'text-exact-v1',
+    absolute_tolerance: member.absolute_tolerance || null, relative_tolerance: member.relative_tolerance || null,
     ...(props.courseId && member.kc_mapping ? { kc_mapping: { root_kc_code: member.kc_mapping.root_kc_code,
       nodes: member.kc_mapping.nodes.map(node => ({ kc_code: node.kc_code, parent_kc_code: node.parent_kc_code, order: node.order })) } } : {}),
     ...(!props.courseId && member.primary_concept_id ? { primary_concept_id: member.primary_concept_id } : {}),
@@ -132,17 +136,19 @@ onMounted(reload)
         <label>题目标题<input v-model="draft.title"></label>
         <label>作答说明<textarea v-model="draft.instructions" rows="2" /></label>
         <label v-if="draft.kind === 'words'">共享词库（分号分隔）<textarea :value="draft.word_bank?.join('；')" rows="2" @input="draft.word_bank = ($event.target as HTMLTextAreaElement).value.split(/[;；\n]/).map(value => value.trim()).filter(Boolean)" /></label>
-        <label>文章材料<textarea v-model="draft.material" rows="9" class="kt-group-editor__material" :lang="draft.content_language" /></label>
-        <p v-if="draft.kind !== 'reading'">在材料中使用 <code v-pre>{{b01}}</code> 等标记，与下方空位编号逐一对应。</p>
+        <label>{{ draft.kind === 'fill_blank' ? '题干（每个空用 ____ 表示）' : '文章材料' }}<textarea v-model="draft.material" rows="9" class="kt-group-editor__material" :lang="draft.content_language" /></label>
+        <p v-if="draft.kind !== 'reading' && draft.kind !== 'fill_blank'">在材料中使用 <code v-pre>{{b01}}</code> 等标记，与下方空位编号逐一对应。</p>
         <section v-for="(member, index) in draft.members" :key="member.item_key" class="kt-group-editor__member">
-          <header class="kt-section-heading"><h3>小题 {{ member.group_order }}</h3><button type="button" class="kt-button kt-button--secondary" @click="removeMember(index)">移除小题</button></header>
-          <div class="kt-group-editor__grid"><label v-if="draft.kind !== 'reading'">空位编号<input v-model="member.blank_id"></label><label>分值<input v-model="member.max_score" data-group-max-score inputmode="decimal" required></label></div>
+          <header class="kt-section-heading"><h3>{{ draft.kind === 'fill_blank' ? '第 ' + member.group_order + ' 空' : '小题 ' + member.group_order }}</h3><button type="button" class="kt-button kt-button--secondary" @click="removeMember(index)">移除小题</button></header>
+          <div class="kt-group-editor__grid"><label v-if="draft.kind !== 'reading' && draft.kind !== 'fill_blank'">空位编号<input v-model="member.blank_id"></label><label>分值<input v-model="member.max_score" data-group-max-score inputmode="decimal" required></label></div>
           <label>教师设定难度（0–1，可留空）<input v-model="member.teacher_difficulty" inputmode="decimal"></label>
-          <label>题干<textarea v-model="member.text" rows="2" /></label>
+          <label v-if="draft.kind !== 'fill_blank'">题干<textarea v-model="member.text" rows="2" /></label>
           <label v-for="option in member.options" :key="option.key" class="kt-group-editor__option"><span>{{ option.key }}</span><input v-model="option.text" :aria-label="`小题 ${member.group_order} 选项 ${option.key}`"></label>
+          <label v-if="draft.kind === 'fill_blank'">判分方式<select v-model="member.question_type"><option value="numeric">数值（分数、小数等价）</option><option value="fill_blank">文本</option></select></label>
+          <div v-if="draft.kind === 'fill_blank' && member.question_type === 'numeric'" class="kt-group-editor__grid"><label>绝对误差（可留空）<input v-model="member.absolute_tolerance"></label><label>相对误差（可留空）<input v-model="member.relative_tolerance"></label></div>
           <label>标准答案<input v-model="member.answer"></label>
-          <label v-if="draft.kind !== 'reading'">可接受答案（分号分隔）<input :value="member.accepted_answers.join('；')" @input="member.accepted_answers = ($event.target as HTMLInputElement).value.split(/[;；]/).map(value => value.trim()).filter(Boolean)"></label>
-          <label v-if="draft.kind !== 'reading'"><input v-model="member.text_match_case_sensitive" type="checkbox">区分大小写</label>
+          <label v-if="draft.kind !== 'reading' && member.question_type !== 'numeric'">可接受答案（分号分隔）<input :value="member.accepted_answers.join('；')" @input="member.accepted_answers = ($event.target as HTMLInputElement).value.split(/[;；]/).map(value => value.trim()).filter(Boolean)"></label>
+          <label v-if="draft.kind !== 'reading' && member.question_type !== 'numeric'"><input v-model="member.text_match_case_sensitive" type="checkbox">区分大小写</label>
           <label>解析<textarea v-model="member.explanation" rows="2" /></label>
           <KcMappingEditor v-if="courseId && member.kc_mapping" :model-value="{ root_kc_code: member.kc_mapping.root_kc_code || '', nodes: member.kc_mapping.nodes }" :concepts="concepts" @update:model-value="member.kc_mapping = $event" />
           <label v-if="!courseId && draft.available_concepts?.length">主知识点<select v-model="member.primary_concept_id"><option :value="null">未设置</option><option v-for="concept in draft.available_concepts" :key="concept.id" :value="concept.id">{{ concept.name }}</option></select></label>

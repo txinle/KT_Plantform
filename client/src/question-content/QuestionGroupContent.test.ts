@@ -14,6 +14,27 @@ beforeAll(() => {
 })
 
 describe('QuestionGroupContent', () => {
+  it('keeps multi-blank inputs in a separate answer area below the stem', async () => {
+    const wrapper = mount(QuestionGroupContent, { props: {
+      group: { ...cloze, kind: 'fill_blank' }, responsesByItemKey: { a1: '-0.5' }, activeItemKey: 'a1',
+    } })
+    expect(wrapper.findAll('article input, article select')).toHaveLength(0)
+    expect(wrapper.get('article').text()).toContain('____')
+    const answers = wrapper.get('[data-group-answer-area]')
+    expect(answers.findAll('input')).toHaveLength(2)
+    expect(answers.text()).toContain('作答区')
+    expect(answers.text()).toContain('第 1 空')
+    expect(answers.text()).toContain('第 2 空')
+    await answers.get('[data-group-item="a2"]').setValue('6')
+    expect(wrapper.emitted('request-activate')?.at(-1)).toEqual([{ itemKey: 'a2', answer: '6', hasAnswer: true }])
+    await answers.get('[data-clear-group-item="a1"]').trigger('click')
+    expect(wrapper.emitted('answer-change')?.at(-1)).toEqual([{ itemKey: 'a1', answer: '' }])
+    await wrapper.setProps({ readonly: true })
+    expect(wrapper.findAll('article input')).toHaveLength(0)
+    expect(answers.get('[data-group-item="a1"]').attributes('disabled')).toBeDefined()
+    expect(answers.find('[data-clear-group-item]').exists()).toBe(false)
+  })
+
   it('renders images in shared material, cloze text and reading options without changing answers', async () => {
     const key = `${'a'.repeat(64)}.png`
     const marker = `{{image:${key}}}`

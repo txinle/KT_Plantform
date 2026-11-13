@@ -204,7 +204,7 @@ def _course_asset_files(course):
             group = question.group
             library[-1]['题组'] = {'编号': group.pk, '形式': group.kind, '标题': group.title,
                 '作答说明': group.instructions, '材料': group.material, '内容语言': group.content_language,
-                '组内顺序': question.group_order, '空位编号': question.blank_id, '词库': list(group.word_bank)}
+                '组内顺序': question.group_order, '空位编号': question.blank_id, '分值': format(question.max_score, '.2f'), '词库': list(group.word_bank)}
         if question.educational_type != 'standard' or question.title or question.instructions:
             library[-1].update({'教学题型': question.educational_type, '标题': question.title, '作答说明': question.instructions})
     rows = {

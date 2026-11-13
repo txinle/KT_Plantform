@@ -641,6 +641,8 @@ class TeacherQuestionCollectionView(APIView):
             questions = questions.filter(educational_type=question_type)
         elif question_type in {"reading", "words", "cloze"}:
             questions = questions.filter(group__kind=question_type)
+        elif question_type == "fill_blank":
+            questions = questions.filter(Q(question_type="fill_blank") | Q(group__kind="fill_blank"))
         elif question_type:
             questions = questions.filter(question_type=question_type, educational_type="standard")
         if status:

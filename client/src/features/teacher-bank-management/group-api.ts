@@ -4,6 +4,8 @@ import type { GroupMemberView, QuestionGroupView } from '@/question-content/ques
 
 export interface GroupEditorMember extends GroupMemberView {
   id?: number
+  absolute_tolerance?: string | null
+  relative_tolerance?: string | null
   answer: unknown
   accepted_answers: string[]
   explanation: string

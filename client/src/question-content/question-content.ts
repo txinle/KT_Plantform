@@ -5,7 +5,7 @@ export function hasQuestionImage(text: string) {
 }
 
 export function questionContentSummary(text: string) {
-  return text.replace(/\{\{image:[a-f0-9]{64}\.(?:png|jpg|webp)\}\}/g, '[图片]')
+  return text.replace(/\{\{image:[a-f0-9]{64}\.(?:png|jpg|webp)\}\}/g, '[图片]').replace(/\{\{b[0-9]{2,}\}\}/g, '____')
 }
 
 export function questionContentParts(text: string, images?: QuestionImages) {
