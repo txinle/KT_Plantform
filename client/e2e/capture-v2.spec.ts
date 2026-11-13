@@ -557,6 +557,117 @@ test('history question links recover the original uncertain navigation and allow
   expect(evidence).toEqual({ answer: 'A', receipts: 1, submissions: 0 })
 })
 
+test('recovery uploads an old document answer before saving its new document descendant', async ({ page, context }) => {
+  test.setTimeout(120_000)
+  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-old-client-${Date.now()}'; command._research_tools=lambda questions: {}; command.handle()`])
+  await page.goto('/login/')
+  await page.getByLabel('账号或学号').fill('S002')
+  await page.getByLabel('密码').fill('student123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) })
+    .getByRole('button', { name: '开始作业' }).click()
+  await expect(page.getByRole('radio').first()).toBeEnabled()
+  const sourceUrl = page.url()
+  const assignmentId = Number(sourceUrl.match(/questions\/(\d+)/)![1])
+  const attemptId = django(['shell', '-c', `import json; from apps.assessment.models import Attempt; print(json.dumps(Attempt.objects.get(assignment_id=${assignmentId}).pk))`]) as number
+  let allowUpload = true
+  let allowDraft = false
+  let oldClient = ''
+  await context.route(/\/api\/v1\/assessment\/process\/(events|capture-v2)\/batch\/$/, async route => {
+    if (allowUpload) return route.continue()
+    await route.fulfill({ status: 503, json: { error: { code: 'e2e_upload_paused' } } })
+  })
+  await context.route('**/api/v1/student/attempts/*/draft/', async route => {
+    if (allowDraft) return route.continue()
+    const body = route.request().postDataJSON()
+    expect(body.capture_bundle.events.some((event: { event_id?: string }) => event.event_id === body.target_event_id)).toBe(true)
+    oldClient = body.capture_bundle.client_instance_id
+    allowUpload = false
+    await route.abort('failed')
+  })
+  await page.getByRole('radio').first().check()
+  await expect.poll(() => oldClient).not.toBe('')
+  await expect(page.getByRole('button', { name: '重试同步', exact: true })).toBeVisible()
+  await page.close()
+  // Expire only this synthetic attempt's old lease so the new document can enter.
+  django(['shell', '-c', `from django.utils import timezone; from apps.assessment.models import Attempt; Attempt.objects.filter(pk=${attemptId}).update(writer_lease_expires_at=timezone.now()); print('{}')`])
+  allowDraft = true
+  const resumed = await context.newPage()
+  const errors: string[] = []
+  resumed.on('response', async response => {
+    if (response.status() >= 400 && /\/(draft|batch)\/$/.test(new URL(response.url()).pathname)) {
+      const body = await response.json().catch(() => ({}))
+      if (body.error?.code) errors.push(body.error.code)
+    }
+  })
+  try {
+    await resumed.goto(sourceUrl)
+    await expect(resumed.getByRole('radio').first()).toBeChecked()
+    await expect(resumed.getByRole('radio').first()).toBeEnabled()
+    await resumed.getByRole('radio').nth(1).check()
+    await expect.poll(() => errors).toContain('writer_lease_conflict')
+    allowUpload = true
+    await resumed.getByRole('button', { name: '重试同步', exact: true }).click()
+    await expect(resumed.getByText('草稿已保存', { exact: true })).toBeVisible({ timeout: 20_000 })
+    expect(errors).not.toContain('response_target_not_persisted')
+    expect(errors).not.toContain('parent_not_received')
+    const evidence = django(['shell', '-c', `import json; from apps.assessment.models import Attempt,AssessmentEvent; a=Attempt.objects.get(pk=${attemptId}); rows=list(AssessmentEvent.objects.filter(attempt=a,event_type='response_transition').order_by('server_ingest_sequence_no')); print(json.dumps({'answer':a.draft_answer,'clients':[str(r.client_instance_id) for r in rows],'ids':[str(r.pk) for r in rows],'parents':[r.payload['parent_event_id'] for r in rows]}))`])
+    expect(evidence.answer).toBe('B')
+    expect(evidence.clients).toHaveLength(2)
+    expect(evidence.clients[0]).toBe(oldClient)
+    expect(evidence.clients[1]).not.toBe(oldClient)
+    expect(evidence.parents).toEqual([null, evidence.ids[0]])
+  } finally { await resumed.close() }
+})
+
+test('recovery cancels an unsent question entry after a rejected draft replay', async ({ page }) => {
+  test.setTimeout(120_000)
+  const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-unsent-entry-${Date.now()}'; command._research_tools=lambda questions: {}; command.handle()`])
+  await page.goto('/login/')
+  await page.getByLabel('账号或学号').fill('S002')
+  await page.getByLabel('密码').fill('student123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL(/\/student\/$/)
+  await acceptResearchConsentIfRequired(page)
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) })
+    .getByRole('button', { name: '开始作业' }).click()
+  await expect(page.getByRole('radio').first()).toBeEnabled()
+  const sourceUrl = page.url()
+  const assignmentId = Number(sourceUrl.match(/questions\/(\d+)/)![1])
+  const attemptId = django(['shell', '-c', `import json; from apps.assessment.models import Attempt; print(json.dumps(Attempt.objects.get(assignment_id=${assignmentId}).pk))`]) as number
+  const destinations = await page.locator('[data-nav-assignment]').evaluateAll((nodes, current) =>
+    [...new Set(nodes.map(node => Number(node.getAttribute('data-nav-assignment'))))].filter(id => id !== current), assignmentId)
+  let drop = true
+  const navigations: number[] = []
+  await page.route('**/api/v1/student/attempts/*/draft/', async route => {
+    const body = route.request().postDataJSON()
+    if (body.save_and_leave) navigations.push(body.to_assignment_id)
+    if (drop && !body.save_and_leave) { drop = false; return route.abort('failed') }
+    await route.continue()
+  })
+  await page.getByRole('radio').first().check()
+  await expect(page.getByRole('button', { name: '重试同步', exact: true })).toBeVisible()
+  django(['shell', '-c', `import uuid; from apps.assessment.models import Attempt; Attempt.objects.filter(pk=${attemptId}).update(writer_lease_token=uuid.uuid4()); print('{}')`])
+  const rejected = page.waitForResponse(response => response.url().endsWith('/draft/') && response.status() === 409)
+  await page.locator(`[data-nav-assignment="${destinations[0]}"]:visible`).click()
+  expect((await (await rejected).json()).error.code).toBe('writer_lease_conflict')
+  expect(navigations).toEqual([])
+  await expect(page).toHaveURL(sourceUrl)
+  // Changing the answer runs the normal lease-recovery/autosave path.
+  await page.getByRole('radio').nth(1).check()
+  await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible({ timeout: 20_000 })
+  await page.locator(`[data-nav-assignment="${destinations[1]}"]:visible`).click()
+  await expect(page).toHaveURL(new RegExp(`/questions/${destinations[1]}/`))
+  await expect(page.locator('[name=answer]').first()).toBeEnabled()
+  expect(navigations).toEqual([destinations[1]])
+  const evidence = django(['shell', '-c', `import json; from apps.assessment.models import Attempt,NavigationReceipt; a=Attempt.objects.get(pk=${attemptId}); print(json.dumps({'answer':a.draft_answer,'receipts':NavigationReceipt.objects.filter(attempt=a).count()}))`])
+  expect(evidence).toEqual({ answer: 'B', receipts: 1 })
+})
+
 test('stable input records one settled text answer then navigates and completes the paper', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const fixture = django(['shell', '-c', [

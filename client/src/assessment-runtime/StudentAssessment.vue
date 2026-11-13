@@ -910,6 +910,7 @@ async function saveAndLeave(item: StudentRuntimeQuestionEntry['navigation'][numb
     throw new Error('切题恢复契约不完整，请刷新页面后重试。')
   }
   navigationSaving = true
+  let navigationPreparationStarted = false
   const budget = createOperationBudget(() => { saveStatus.value = '正在同步作答记录，切题结果尚待确认…' })
   try {
     if (!pendingNavigation.value) {
@@ -921,6 +922,7 @@ async function saveAndLeave(item: StudentRuntimeQuestionEntry['navigation'][numb
       await budget.run(() => runtime.pointerWritesSettled())
       if (!navigation) throw new Error('缺少本次切题令牌。')
       const credentials = writerLease?.cachedCredentials()
+      navigationPreparationStarted = true
       const left = await budget.run(() => runtime.prepareNavigation!(navigation.navigationId, item.assignment_id))
       const intent: NavigationIntent = {
         token: navigation.navigationId, clickedAt: navigation.clientOccurredAt,
@@ -970,6 +972,9 @@ async function saveAndLeave(item: StudentRuntimeQuestionEntry['navigation'][numb
     const waitExpired = (caught as { code?: string })?.code === 'assessment_wait_expired'
     if (waitExpired) navigationUncertain.value = true
     if (!intent && navigation && !waitExpired) {
+      if (!navigationPreparationStarted) {
+        await (await getSessionController(state.value!.session_id, getBootstrapContext().csrf_token)).cancelEntry(state.value!.session_id, navigation.navigationId)
+      }
       runtime.cancelNavigation?.(navigation.navigationId)
       pendingNavigationClick = undefined
     }

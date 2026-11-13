@@ -347,6 +347,7 @@ export class SessionController {
       ? createWriterLease({ client: { post: (url, body, options) => getStudentAssessmentApi().post(url, body, { ...options, timeoutMs: 30000 }) }, clientInstanceId: sender.clientInstanceId, acquireUrl: process.writer_lease_acquire_url,
         renewUrl: process.writer_lease_renew_url, releaseUrl: process.writer_lease_release_url, initialLease }) : undefined
     const restored = await this.store.restoreResponse(process.session_id, process.attempt_id)
+    let restoredResponseSynchronized = !restored || restored.event_id === process.active_response_event_id;
     if (this.disposed) throw new Error('会话控制器已关闭。')
     let closeFlight: Promise<boolean> | undefined;
     const prepareMutation = async (intent: CaptureMutation, prepare?: () => Promise<Record<string, unknown> | undefined>) => {
@@ -446,6 +447,19 @@ export class SessionController {
         }
         const rejectionKey = `capture-mutation-rejection:${process.session_id}:${process.attempt_id}`;
         const rejection = await this.store.readMetadata<CaptureMutationRejection>(rejectionKey);
+        if (!restoredResponseSynchronized && body.target_event_id) {
+          // A new document's bundle cannot carry the previous client's answer or its parents.
+          const boundary = await this.store.freezeBoundary(sender.clientInstanceId);
+          const previousEvents = await Promise.all(Object.entries(boundary)
+            .filter(([id]) => id !== sender.clientInstanceId)
+            .map(([id, sequence]) => this.store.pendingEvents(id, sequence)));
+          if (previousEvents.some(events => events.some(event => event.session_id === process.session_id
+            && event.attempt_id === process.attempt_id && event.event_type === 'response_transition'))
+            && await sender.flushConfirmed({ ignoreVisibility: true, operationId: operationId || undefined, timeoutMs: 30000 }) === false) {
+            throw new Error('作答轨迹尚未确认保存，请恢复网络后重试。');
+          }
+          restoredResponseSynchronized = true;
+        }
         if (rejection?.code === 'response_target_not_persisted') {
           const [events, head] = await Promise.all([
             this.store.pendingEvents(sender.clientInstanceId, Number.MAX_SAFE_INTEGER),

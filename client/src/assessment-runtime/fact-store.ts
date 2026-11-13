@@ -3,6 +3,19 @@ import { clone, submissionOwnership, missingSequenceRanges, MAX_BATCH_SIZE } fro
 const DATABASE_NAME = 'kt-process-events-v1'
 const DATABASE_VERSION = 2
 interface Meta<T> { key: string; value: T }
+function pendingParentBoundaries(records: FactRecord[]) {
+  const parents = new Map(records.filter(row => row.event.event_id).map(row => [row.event.event_id, row.client_instance_id]))
+  const boundaries = new Map<string, number>()
+  for (const row of records) {
+    if (row.event.event_type !== 'response_transition') continue
+    const parentClient = parents.get(row.event.payload.parent_event_id as string)
+    if (parentClient && parentClient !== row.client_instance_id) {
+      // Different documents cannot share a batch; confirm the parent before its descendants.
+      boundaries.set(row.client_instance_id, Math.min(boundaries.get(row.client_instance_id) ?? Infinity, row.client_sequence_no))
+    }
+  }
+  return boundaries
+}
 const packetScopeRejections = new Set(['invalid_event_link', 'task_terminated', 'deadline_expired', 'course_access_revoked'])
 function canRevalidate(rejection: CaptureRejection) {
   return rejection.permanent === true && rejection.http_status !== undefined
@@ -142,7 +155,9 @@ export class MemoryOutbox implements CaptureStore {
     return this._locked(() => {
       const owned = submissionOwnership([...this.submissionIntents.values(), ...this.navigationIntents.values(),
         ...[...this.metadata].filter(([key]) => key.startsWith('capture-flush:') || key.startsWith('capture-mutation:')).map(([, intent]) => intent as DurableIntent)]);
+      const parentBoundaries = pendingParentBoundaries(this.records);
       const ordered = this.records.filter((record) => !owned.events.has(`${record.client_instance_id}:${record.client_sequence_no}`)
+        && record.client_sequence_no < (parentBoundaries.get(record.client_instance_id) ?? Infinity)
         && (!scope || record.event.session_id === scope.sessionId)
         && (!boundary || record.client_sequence_no <= (boundary[record.client_instance_id] ?? -1))).sort((left, right) => (
         left.outbox_order - right.outbox_order
@@ -441,7 +456,9 @@ export class IndexedDbOutbox implements CaptureStore {
     ]);
     await completed;
     const owned = submissionOwnership(metadata.filter((row) => row.key.startsWith('submission-intent:') || row.key.startsWith('navigation-intent:') || row.key.startsWith('capture-flush:') || row.key.startsWith('capture-mutation:')).map((row) => row.value));
+    const parentBoundaries = pendingParentBoundaries(allRecords);
     const records = allRecords.filter((record) => !owned.events.has(`${record.client_instance_id}:${record.client_sequence_no}`)
+      && record.client_sequence_no < (parentBoundaries.get(record.client_instance_id) ?? Infinity)
       && (!scope || record.event.session_id === scope.sessionId)
       && (!boundary || record.client_sequence_no <= (boundary[record.client_instance_id] ?? -1)));
     if (!records.length) return null;

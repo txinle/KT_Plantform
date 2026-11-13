@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   routeQuery: {} as Record<string, string>,
   bootstrapUser: undefined as import('@/app/bootstrap').AuthenticatedUser | undefined,
   rememberEnteredQuestion: vi.fn(), takeEnteredQuestion: vi.fn(), takeStartedQuestion: vi.fn(),
-  pendingEntry: vi.fn(), freezeEntry: vi.fn(), confirmLeave: vi.fn(), recoverClosedSubmission: vi.fn(), confirmEntry: vi.fn(), offlineBootstrapRecovery: false,
+  pendingEntry: vi.fn(), freezeEntry: vi.fn(), cancelEntry: vi.fn(), confirmLeave: vi.fn(), recoverClosedSubmission: vi.fn(), confirmEntry: vi.fn(), offlineBootstrapRecovery: false,
   metadata: new Map<string, unknown>(),
   preparedManifest: undefined as undefined | import('./prepared-paper').PreparedManifest | Promise<import('./prepared-paper').PreparedManifest>,
   paperPrefetch: vi.fn(),
@@ -87,7 +87,7 @@ vi.mock('./api', () => ({ getStudentAssessmentApi: () => mocks.api,
 vi.mock('./session-controller', () => ({
   createProcessRuntime: (...args: unknown[]) => mocks.createProcessRuntime(...args),
   disposeSessionController: vi.fn(),
-  getSessionController: async () => ({ store: { readMetadata: async (key: string) => mocks.metadata.get(key), writeMetadata: async (key: string, value: unknown) => { mocks.metadata.set(key, structuredClone(value)) } }, freezeEntry: mocks.freezeEntry, pendingEntry: mocks.pendingEntry, confirmLeave: mocks.confirmLeave, recoverClosedSubmission: mocks.recoverClosedSubmission, validateEntry: vi.fn(), confirmEntry: mocks.confirmEntry, cancelEntry: vi.fn(),
+  getSessionController: async () => ({ store: { readMetadata: async (key: string) => mocks.metadata.get(key), writeMetadata: async (key: string, value: unknown) => { mocks.metadata.set(key, structuredClone(value)) } }, freezeEntry: mocks.freezeEntry, pendingEntry: mocks.pendingEntry, confirmLeave: mocks.confirmLeave, recoverClosedSubmission: mocks.recoverClosedSubmission, validateEntry: vi.fn(), confirmEntry: mocks.confirmEntry, cancelEntry: mocks.cancelEntry,
     rememberEnteredQuestion: mocks.rememberEnteredQuestion, takeEnteredQuestion: mocks.takeEnteredQuestion, takeStartedQuestion: mocks.takeStartedQuestion }),
 }))
 vi.mock('./prepared-paper', async (original) => {
@@ -1053,6 +1053,7 @@ describe('StudentAssessment', () => {
     expect(mocks.push).not.toHaveBeenCalled()
     expect(wrapper.get('[name=answer]').attributes('disabled')).toBeDefined()
     expect(mocks.runtime.saveNavigationIntent).not.toHaveBeenCalledWith(null)
+    expect(mocks.cancelEntry).not.toHaveBeenCalled()
     await wrapper.get('[data-navigation-retry]').trigger('click')
     await flushPromises()
     expect(mocks.runtime.freezeNavigationSnapshot).toHaveBeenCalledOnce()
@@ -1060,6 +1061,52 @@ describe('StudentAssessment', () => {
     expect(mocks.runtime.saveNavigationIntent).toHaveBeenCalledWith(null)
     expect(mocks.push).toHaveBeenCalledOnce()
     wrapper.unmount()
+  })
+
+  it.each([12, 13])('REPRO: allows destination %s after a draft rejection before navigation is sent', async destination => {
+    const { createSessionController } = await vi.importActual<typeof import('./session-controller')>('./session-controller')
+    const { MemoryOutbox } = await import('./fact-store')
+    const store = new MemoryOutbox()
+    const controller = createSessionController({ store, csrfToken: 'csrf', tabId: 'repro', autoSchedule: false })
+    const defaults = { freeze: mocks.freezeEntry.getMockImplementation(), pending: mocks.pendingEntry.getMockImplementation(),
+      confirm: mocks.confirmEntry.getMockImplementation(), cancel: mocks.cancelEntry.getMockImplementation() }
+    mocks.freezeEntry.mockImplementation(controller.freezeEntry.bind(controller))
+    mocks.pendingEntry.mockImplementation(controller.pendingEntry.bind(controller))
+    mocks.confirmEntry.mockImplementation(controller.confirmEntry.bind(controller))
+    mocks.cancelEntry.mockImplementation(controller.cancelEntry.bind(controller))
+    const captured = captureV2Question({ remaining_seconds: 600 })
+    captured.process.active_response_event_id = '00000000-0000-4000-8000-000000000050'
+    Object.assign(captured.process, { save_and_leave: { version: 1 } })
+    captured.navigation.push({ assignment_id: 13, sequence_index: 3, status: 'unvisited',
+      url: '/student/sessions/7/questions/13/', current: false })
+    mocks.api.question.mockResolvedValue(captured)
+    const wrapper = mount(StudentAssessment)
+    try {
+      await flushPromises()
+      expect(await controller.pendingEntry(7)).toBeNull()
+      mocks.runtime.pointerWritesSettled.mockRejectedValueOnce(new ApiError(409, { error: {
+        code: 'response_target_not_persisted', message: '目标答案状态尚未持久化，请先同步本机记录后重试。',
+      } }))
+      await wrapper.get('[data-nav-assignment="12"]').trigger('click')
+      await flushPromises()
+      expect(mocks.api.saveAndLeave).not.toHaveBeenCalled()
+      expect(mocks.runtime.prepareNavigation).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('目标答案状态尚未持久化')
+      expect(wrapper.get('input[value="B"]').element).toHaveProperty('checked', true)
+      expect(await controller.pendingEntry(7)).toBeNull()
+      await wrapper.get(`[data-nav-assignment="${destination}"]`).trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('上一次进入结果尚未确认，请先核验原题目。')
+      expect(mocks.api.saveAndLeave).toHaveBeenCalledOnce()
+      expect(mocks.api.saveAndLeave.mock.calls[0]![1].to_assignment_id).toBe(destination)
+    } finally {
+      wrapper.unmount()
+      controller.dispose()
+      mocks.freezeEntry.mockImplementation(defaults.freeze!)
+      mocks.pendingEntry.mockImplementation(defaults.pending!)
+      mocks.confirmEntry.mockImplementation(defaults.confirm!)
+      mocks.cancelEntry.mockImplementation(defaults.cancel || (() => undefined))
+    }
   })
 
   it('subsumes queued drafts in route navigation while preserving every local transition', async () => {
