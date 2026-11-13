@@ -588,6 +588,9 @@ test('recovery uploads an old document answer before saving its new document des
     allowUpload = false
     await route.abort('failed')
   })
+  // Keep the first answer in the draft's durable bundle, independent of background-upload timing.
+  // Only the original document is hidden; the resumed document uses normal visibility and uploads.
+  await page.evaluate(() => Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }))
   await page.getByRole('radio').first().check()
   await expect.poll(() => oldClient).not.toBe('')
   await expect(page.getByRole('button', { name: '重试同步', exact: true })).toBeVisible()
