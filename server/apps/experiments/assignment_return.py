@@ -7,13 +7,14 @@ from django.utils import timezone
 
 from apps.accounts.course_access import accessible_courses, lock_writable_course, require_writable_course, require_course_manager
 from apps.analytics.models import ResearchSessionMaterialization, StudentExperimentResultSnapshot
+from apps.analytics.research_deletion import retire_research_exports
 from apps.api.exceptions import ApiConflict
 from apps.assessment.deadline_services import DeadlineDecisionService
 from apps.assessment.models import ExperimentSession, SessionSubmission
 from apps.assessment.prepared_services import prepare_participant
 from apps.audit.models import AuditLog
 from .models import ClassExperimentTask, Experiment, ExperimentVersionParticipantSnapshot
-from .research_deletion import _coverage_runs, _deletion_transaction, _purge_sessions
+from .research_deletion import _coverage_runs, _deletion_transaction, _lock_export_generations, _purge_sessions
 
 
 SALT = 'student-assignment-return-v1'
@@ -47,8 +48,6 @@ def _blocked(task, session):
         return '该学生正在交卷，请等待处理完成后重试。'
     if ResearchSessionMaterialization.objects.filter(session=session, status='running').exists():
         return '该学生的作答数据正在处理，请稍后重试。'
-    if _coverage_runs([session.pk]):
-        return '该作答已关联研究采集校验结果，暂不能打回。'
     return ''
 
 
@@ -77,7 +76,8 @@ def return_assignment(*, task_id, participant_id, actor, confirmation_token):
         ('actor', actor.pk), ('task', task_id), ('participant', participant_id))):
         raise ApiConflict('确认信息与当前学生不匹配，请重新核对。', code='RETURN_SCOPE_CHANGED')
     request_hash = hashlib.sha256(confirmation_token.encode()).hexdigest()
-    with _deletion_transaction():
+    with _lock_export_generations(course=task.experiment.course, experiment=task.experiment,
+                                  class_group=task.class_group), _deletion_transaction():
         course = lock_writable_course(task.experiment.course_id)
         require_course_manager(course, actor, capability='experiment')
         Experiment.objects.select_for_update().get(pk=task.experiment_id)
@@ -96,7 +96,13 @@ def return_assignment(*, task_id, participant_id, actor, confirmation_token):
         old_id = session.pk
         old_order = list(session.assignments.order_by('assigned_sequence_index').values_list('snapshot_id', flat=True))
         counts = {}
-        _purge_sessions([old_id], counts, [])
+        coverage_run_ids = _coverage_runs([old_id])
+        retired = retire_research_exports(course_id=course.pk, experiment_ids=[task.experiment_id],
+            class_id=task.class_group_id, coverage_run_ids=coverage_run_ids,
+            reason='student_assignment_return', actor=actor)
+        # A coverage run describes a frozen scope. Retire the derived run as a
+        # whole; the other students' sessions and source answers remain intact.
+        _purge_sessions([old_id], counts, coverage_run_ids)
         StudentExperimentResultSnapshot.objects.filter(class_task=task, student_id=participant.student_id).delete()
         artifact = prepare_participant(participant)
         new = artifact.session
@@ -107,5 +113,7 @@ def return_assignment(*, task_id, participant_id, actor, confirmation_token):
         AuditLog.objects.create(actor=actor, action=ACTION, object_type='Experiment', object_id=str(task.experiment_id),
             details={'student_id': participant.student_id, 'class_task_id': task.pk, 'old_session_id': old_id,
                 'new_session_id': new.pk, 'removed_counts': counts, 'backup_created': False,
+                'retired_export_count': retired['export_count'],
+                'cleanup_id': str(retired['cleanup_id']) if retired['cleanup_id'] else None,
                 'request_hash': request_hash, 'result': result})
         return result

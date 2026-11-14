@@ -11,7 +11,8 @@ from apps.api.test_support import domain_payload
 from apps.assessment.models import ExperimentSession, SubmissionEvent, GradeRecord, AssessmentEvent
 from apps.assessment.test_student_api import StudentApiFixtureMixin
 from apps.audit.models import AuditLog
-from apps.analytics.models import StudentExperimentResultSnapshot
+from apps.analytics.models import StudentExperimentResultSnapshot, RecordingCoverageRun, ExportSnapshot, ExportJob
+from apps.analytics.recording_coverage import generate_scope_coverage
 from .publication_services import manual_close_task
 
 
@@ -116,12 +117,46 @@ class AssignmentReturnTests(StudentApiFixtureMixin, TestCase):
         self.assertTrue(ExperimentSession.objects.filter(pk=self.session.pk).exists())
         self.assertTrue(SubmissionEvent.objects.filter(attempt_id=self.attempt.pk).exists())
 
-    def test_coverage_references_are_not_removed_with_other_students_results(self):
+    def coverage_export(self):
+        self.assertEqual(self.start(student=self.peer).status_code, 201)
+        peer = ExperimentSession.objects.get(class_task=self.task, student=self.peer)
+        peer_attempt = self.submit_attempt_without_finishing(peer)
+        run = generate_scope_coverage([self.session, peer])
+        peer_run = generate_scope_coverage([peer])
+        snapshot = ExportSnapshot.objects.create(course=self.course, experiment=self.task.experiment,
+            created_by=self.teacher, coverage_run=run)
+        job = ExportJob.objects.create(course=self.course, snapshot=snapshot, created_by=self.teacher,
+            status=ExportJob.Status.SUCCEEDED)
+        self.client.force_login(self.teacher)
+        return run, peer_run, peer, peer_attempt, snapshot, job
+
+    def test_return_clears_coverage_and_stale_export_but_preserves_peer_answers(self):
+        run, peer_run, peer, peer_attempt, snapshot, job = self.coverage_export()
         preview = self.preview()
-        with patch('apps.experiments.assignment_return._coverage_runs', return_value=[123]):
-            self.assertFalse(self.preview()['can_return'])
-            self.assertEqual(self.execute(preview).status_code, 409)
+        self.assertTrue(preview['can_return'])
+        response = self.execute(preview)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertFalse(ExperimentSession.objects.filter(pk=self.session.pk).exists())
+        self.assertFalse(RecordingCoverageRun.objects.filter(pk=run.pk).exists())
+        self.assertFalse(ExportSnapshot.objects.filter(pk=snapshot.pk).exists())
+        self.assertFalse(ExportJob.objects.filter(pk=job.pk).exists())
+        self.assertTrue(RecordingCoverageRun.objects.filter(pk=peer_run.pk).exists())
+        self.assertTrue(ExperimentSession.objects.filter(pk=peer.pk).exists())
+        self.assertTrue(SubmissionEvent.objects.filter(attempt=peer_attempt).exists())
+        self.client.force_login(self.student)
+        self.assertEqual(self.start().status_code, 201)
+
+    def test_failed_return_restores_coverage_and_export(self):
+        run, _, _, _, snapshot, job = self.coverage_export()
+        preview = self.preview()
+        self.assertTrue(preview['can_return'])
+        with patch('apps.experiments.assignment_return.prepare_participant', side_effect=RuntimeError('rebuild failed')):
+            with self.assertRaisesMessage(RuntimeError, 'rebuild failed'):
+                self.execute(preview)
         self.assertTrue(ExperimentSession.objects.filter(pk=self.session.pk).exists())
+        self.assertTrue(RecordingCoverageRun.objects.filter(pk=run.pk).exists())
+        self.assertTrue(ExportSnapshot.objects.filter(pk=snapshot.pk).exists())
+        self.assertTrue(ExportJob.objects.filter(pk=job.pk).exists())
 
 
 class AssignmentReturnConcurrencyTests(StudentApiFixtureMixin, TransactionTestCase):
