@@ -54,6 +54,7 @@ def score_payload(
     relative_tolerance: Any = None,
     max_score: Any = Decimal("1"),
     case_sensitive: bool = False,
+    question_text: str = '',
 ) -> tuple[bool, Decimal]:
     """Return binary correctness and its frozen question weight."""
     maximum = normalize_finite_decimal(max_score)
@@ -79,7 +80,12 @@ def score_payload(
                 scale = abs(expected) if expected != 0 else Decimal("1")
                 checks.append(difference <= relative * scale)
             is_correct = any(checks) if checks else difference == 0
-    elif question_type in {"short_answer", "fill_blank"}:
+    elif question_type == "fill_blank":
+        from .legacy_fill import fill_answer_matches
+        is_correct = any(fill_answer_matches(candidate, submitted_answer,
+            question_text=question_text, case_sensitive=case_sensitive)
+            for candidate in [correct_answer, *(accepted_answers or [])])
+    elif question_type == "short_answer":
         candidates = [correct_answer, *(accepted_answers or [])]
         submitted = _normalized_text(submitted_answer, case_sensitive=case_sensitive)
         is_correct = bool(submitted) and submitted in {_normalized_text(item, case_sensitive=case_sensitive) for item in candidates}

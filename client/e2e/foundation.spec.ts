@@ -371,10 +371,10 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
     await fileInput.setInputFiles(format === 'csv' ? [downloadPath, ...images] : downloadPath)
     const uploaded = await response
     expect(uploaded.status()).toBe(200)
-    expect((await uploaded.json()).data.preview.rows).toHaveLength(22)
+    expect((await uploaded.json()).data.preview.rows).toHaveLength(24)
     await expect(preview).toBeVisible()
-    await expect(summary).toContainText('全部 12')
-    await expect(summary).toContainText('导入后可用 1')
+    await expect(summary).toContainText('全部 13')
+    await expect(summary).toContainText('导入后可用 2')
     await expect(summary).toContainText('保存为草稿 11')
     await expect(summary).toContainText('需修正 0')
     return downloadPath!
@@ -415,7 +415,7 @@ test('question-bank Vue imports CSV, Excel and Word templates, then retries corr
   await page.locator('[data-confirm-import]').click()
   expect((await response).status()).toBe(201)
   const result = page.getByRole('status').filter({ hasText: '本次导入已完成。' })
-  await expect(result).toContainText('新增 22 道，其中可用 1 道、草稿 21 道；跳过 0 道，未完成 0 道。')
+  await expect(result).toContainText('新增 24 道，其中可用 3 道、草稿 21 道；跳过 0 道，未完成 0 道。')
   await page.setViewportSize({ width: 1440, height: 900 })
   await expect(page.locator('[data-confirm-import]')).toBeDisabled()
 

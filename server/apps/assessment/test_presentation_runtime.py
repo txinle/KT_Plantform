@@ -9,6 +9,21 @@ class PresentationRuntimeTests(TestCase):
     publish = test_group_snapshots.GroupSnapshotTests.publish
     start_session = test_group_snapshots.GroupSnapshotTests.start_session
 
+    def test_legacy_blanks_are_projected_without_answers_or_new_attempts(self):
+        from .prepared_services import prepared_runtime
+        single = self.bank.questions.get(group__isnull=True)
+        single.text, single.correct_answer = 'k=____；P=____ W。', '-1/2；6'
+        single.save()
+        self.bank.questions.filter(group__isnull=False).delete()
+        experiment, _ = self.publish()
+        session = self.start_session(experiment)
+        attempt = session.attempts.select_related('session', 'assignment__snapshot').get(assignment__snapshot__group_snapshot__isnull=True)
+        result = prepared_runtime(attempt)
+        self.assertEqual(result['question']['answer_blank_count'], 2)
+        self.assertEqual(session.attempts.count(), 1)
+        self.assertEqual(self.entry_runtime['question']['answer_blank_count'], 2)
+        self.assertNotIn('correct_answer', result['question'])
+
     def test_basic_question_kind_matches_prepared_and_active_navigation(self):
         from .group_runtime import presentation_runtime_projection
         from .prepared_services import _presentation_units

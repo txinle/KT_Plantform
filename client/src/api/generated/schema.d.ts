@@ -6375,6 +6375,7 @@ export interface components {
             total: number;
         };
         StudentRuntimeQuestion: {
+            answer_blank_count?: number;
             images?: {
                 [key: string]: string;
             };

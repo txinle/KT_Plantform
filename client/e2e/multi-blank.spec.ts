@@ -153,3 +153,51 @@ test('multi-blank simple import preserves two scores, inputs, feedback and expor
   expect(check.status, check.stderr).toBe(0)
   expect(JSON.parse(check.stdout)).toEqual({ files: 8, answers: ['-0.5', '6/1'], correct: ['是', '是'], ids: 2, blanks: ['b01', 'b02'], weights: ['2.00', '1.00'] })
 })
+
+test('legacy published two-blank question restores separate inputs and retains one submission', async ({ page }, info) => {
+  test.setTimeout(180_000)
+  const fixture = JSON.parse(django(['shell', '-c', `import apps.question_bank.management.commands.seed_e2e_english_groups as m; m.COURSE_TERM='legacy-${Date.now()}'; m.STANDALONE_BANK+='-legacy-${Date.now()}'; m.Command().handle()`]).trim().split('\n').at(-1)!)
+  django(['shell', '-c', [
+    'from apps.question_bank.models import Question,QuestionConcept,Concept',
+    'from apps.experiments.models import Experiment',
+    'from apps.experiments.publication_services import get_or_create_publish_plan,save_plan_selection,generate_preview,commit_publish_plan',
+    `q=Question.objects.create(bank_id=${fixture.course_bank_id},sequence=1,question_type='fill_blank',text='k=____; P=____ W.',correct_answer='-1/2；6')`,
+    `QuestionConcept.objects.create(question=q,concept=Concept.objects.filter(course_id=${fixture.course_id}).first(),is_primary=True)`,
+    `e=Experiment.objects.get(pk=${fixture.course_experiment_id})`,
+    "e.sampling_mode='total_count'; e.sampling_total_count=1; e.save()",
+    'from apps.experiments.models import ExperimentSamplingKC',
+    'ExperimentSamplingKC.objects.get_or_create(experiment=e,concept=q.concept_links.first().concept)',
+    'p=get_or_create_publish_plan(e,e.owner)',
+    `p=save_plan_selection(p,e.owner,expected_revision=p.plan_revision,class_ids=[${fixture.class_id}],exclusions_by_class={})`,
+    'generate_preview(p,e.owner,expected_revision=p.plan_revision)',
+    'p.refresh_from_db()',
+    'commit_publish_plan(p,e.owner,expected_revision=p.plan_revision)',
+  ].join('\n')])
+  await login(page, fixture.student)
+  await acceptResearchConsentIfRequired(page)
+  await page.goto(`/student/courses/${fixture.course_id}/`)
+  await page.locator('[data-task-action="start"]').click()
+  await expect(page.locator('.kt-assessment-focus')).toHaveAttribute('data-init-state', 'ready')
+  const area = page.locator('[data-legacy-answer-area]')
+  await expect(area.locator('input')).toHaveCount(2)
+  const sessionId = Number(page.url().match(/sessions\/(\d+)/)![1])
+  for (const [index, value] of ['-0.5', '6'].entries()) {
+    const saved = page.waitForResponse(response => response.url().includes('/draft/') && response.request().method() === 'POST'
+      && response.request().postDataJSON()?.answer === (index === 0 ? '-0.5；' : '-0.5；6'))
+    await area.getByRole('textbox', { name: `第 ${index + 1} 空`, exact: true }).fill(value)
+    expect((await saved).status()).toBe(200)
+  }
+  await page.reload()
+  await expect(area.getByRole('textbox', { name: '第 1 空', exact: true })).toHaveValue('-0.5')
+  await expect(area.getByRole('textbox', { name: '第 2 空', exact: true })).toHaveValue('6')
+  for (const [width, height] of [[1440, 900], [390, 844], [720, 450]]) {
+    await page.setViewportSize({ width: width!, height: height! })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`legacy-input-${width}.png`), fullPage: true })
+  }
+  await submitWholePaper(page)
+  const summary = (await (await page.request.get(`/api/v1/student/sessions/${sessionId}/summary/`)).json()).data
+  expect(summary.attempt_count).toBe(1)
+  const stored = JSON.parse(django(['shell', '-c', `import json; from apps.assessment.models import SubmissionEvent; print(json.dumps(list(SubmissionEvent.objects.filter(attempt__session_id=${sessionId}).values('final_answer','is_correct','score')),default=str))`]).trim().split('\n').at(-1)!)
+  expect(stored).toEqual([{ final_answer: '-0.5；6', is_correct: true, score: '1.00' }])
+})

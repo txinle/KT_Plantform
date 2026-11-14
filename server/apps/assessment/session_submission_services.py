@@ -359,7 +359,7 @@ def run_session_submission(claimed_job):
                             normalize_numeric_answer(answer)
                         correct, score = score_payload(snapshot.question_type, snapshot.correct_answer, answer,
                             accepted_answers=snapshot.accepted_answers, absolute_tolerance=snapshot.absolute_tolerance,
-                            relative_tolerance=snapshot.relative_tolerance,
+                            relative_tolerance=snapshot.relative_tolerance, question_text=snapshot.text,
                             max_score=snapshot.max_score, case_sensitive=snapshot.text_match_case_sensitive)
                         grading = initial_grading_result(attempt, correct, score)
                     except (TypeError, ValueError, ValidationError):

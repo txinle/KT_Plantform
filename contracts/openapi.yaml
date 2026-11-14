@@ -25619,6 +25619,9 @@ components:
     StudentRuntimeQuestion:
       type: object
       properties:
+        answer_blank_count:
+          type: integer
+          minimum: 0
         images:
           type: object
           additionalProperties:

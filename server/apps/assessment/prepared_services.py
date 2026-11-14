@@ -46,6 +46,7 @@ def preparation_signature(participant):
 
 
 def _projection(attempt, confidence, item_count):
+    from apps.question_bank.services.legacy_fill import legacy_blank_count
     from .atomic_submission_services import MAX_BYTES, MAX_CHECKPOINTS, MAX_EVENTS
     from .api.views import _runtime_options, _runtime_pending_confidence, _runtime_initial_response_state
     from .research_tool_services import available_tools, due_rules
@@ -55,6 +56,8 @@ def _projection(attempt, confidence, item_count):
     question = {
         'snapshot_id': assignment.snapshot_id, 'stable_code': assignment.snapshot.stable_code,
         'code': assignment.snapshot.code, 'question_type': assignment.snapshot.question_type,
+        'answer_blank_count': legacy_blank_count(assignment.snapshot.question_type,
+            assignment.snapshot.text, grouped=bool(assignment.snapshot.group_snapshot_id)),
         'educational_type': assignment.snapshot.educational_type,
         'title': assignment.snapshot.title, 'instructions': assignment.snapshot.instructions,
         'text': assignment.snapshot.text, 'primary_kc': assignment.snapshot.primary_kc if tools['kc_visible'] else '',

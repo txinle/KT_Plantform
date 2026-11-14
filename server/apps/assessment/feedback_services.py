@@ -324,7 +324,7 @@ def initial_grading_result(attempt, correct, score) -> InitialGradingResult:
         is_correct=correct,
         score=score,
         max_score=attempt.assignment.snapshot.max_score,
-        method="automatic",
+        method="fill-normalized-v2" if question_type == 'fill_blank' else "automatic",
     )
 
 

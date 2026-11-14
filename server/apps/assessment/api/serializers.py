@@ -93,6 +93,7 @@ class StudentRuntimeOptionSerializer(serializers.Serializer):
 
 
 class StudentRuntimeQuestionSerializer(serializers.Serializer):
+    answer_blank_count = serializers.IntegerField(required=False, min_value=0)
     images = serializers.DictField(child=serializers.CharField(), required=False)
     snapshot_id = serializers.IntegerField()
     stable_code = serializers.CharField(allow_blank=True)

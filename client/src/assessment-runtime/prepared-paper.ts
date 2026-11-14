@@ -93,7 +93,8 @@ export async function hydratePreparedQuestion(dto: StudentRuntimeQuestionEntry, 
   markPreparedStartupPhase('first_content_start')
   const decoded = await cache.content<{ question: StudentRuntimeQuestionEntry['question']; question_group?: StudentRuntimeQuestionEntry['question_group']; research_tools?: StudentRuntimeQuestionEntry['research_tools'] }>(prepared.question)
   markPreparedStartupPhase('first_content_end')
-  dto.question = decoded.question
+  const answerBlankCount = dto.question?.answer_blank_count
+  dto.question = { ...decoded.question, ...(answerBlankCount === undefined ? {} : { answer_blank_count: answerBlankCount }) }
   if (decoded.question_group) dto.question_group = decoded.question_group
   if (decoded.research_tools) dto.research_tools = { ...decoded.research_tools, ...dto.research_tools }
   const manifest = cache.content<PreparedManifest>(prepared.manifest).then(value => {

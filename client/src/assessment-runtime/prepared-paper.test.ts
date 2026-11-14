@@ -46,8 +46,9 @@ describe('prepared paper cache', () => {
     let release!: (value: Response) => void
     const fetch = vi.fn((url: string) => url === question.descriptor.url ? Promise.resolve(new Response(question.text)) : new Promise<Response>(resolve => { release = resolve }))
     vi.stubGlobal('fetch', fetch)
-    const hydrated = await hydratePreparedQuestion({ assessment_flow_version: 1, session_id: 7, prepared_paper: { version: 1, content_version: 'v1', question: question.descriptor, manifest: manifest.descriptor } } as never, new MemoryOutbox(), 1)
+    const hydrated = await hydratePreparedQuestion({ assessment_flow_version: 1, session_id: 7, question: { answer_blank_count: 2 }, prepared_paper: { version: 1, content_version: 'v1', question: question.descriptor, manifest: manifest.descriptor } } as never, new MemoryOutbox(), 1)
     expect(hydrated.dto.question.text).toBe('First question')
+    expect(hydrated.dto.question.answer_blank_count).toBe(2)
     await Promise.resolve()
     expect(fetch).toHaveBeenCalledTimes(2)
     release(new Response(manifest.text))

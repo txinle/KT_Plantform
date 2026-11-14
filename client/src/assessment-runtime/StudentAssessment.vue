@@ -10,6 +10,7 @@ import FocusAssessmentHeader from '@/design-system/components/FocusAssessmentHea
 import AppHeader from '@/design-system/components/AppHeader.vue'
 import QuestionGroupContent from '@/question-content/QuestionGroupContent.vue'
 import QuestionContent from '@/question-content/QuestionContent.vue'
+import LegacyBlankInputs from './LegacyBlankInputs.vue'
 import { hasQuestionImage } from '@/question-content/question-content'
 import type { GroupActivationIntent, GroupAnswerChange } from '@/question-content/question-group-content'
 import { createGroupActivationQueue } from './group-activation'
@@ -1881,6 +1882,10 @@ onBeforeUnmount(() => {
               </label>
               <button v-if="trajectory" type="button" class="kt-button kt-button--secondary" data-clear-response :disabled="responseDisabled || !hasLocalResponse" @click="clearSelection">清除选择</button>
             </fieldset>
+            <LegacyBlankInputs v-else-if="(state.question.answer_blank_count || 0) > 1" :key="state.assignment.assignment_id"
+              :count="state.question.answer_blank_count!" :value="String(answer ?? '')" :disabled="responseDisabled"
+              @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition"
+              @compositionend="finishComposition" @blur="flushTextInputOnBlur" />
             <label v-else class="kt-assessment-text-answer">
               <span>{{ state.question.educational_type === 'essay' ? '你的作文' : state.question.educational_type === 'translation' ? '你的译文' : '你的答案' }}</span>
               <textarea v-if="state.question.question_type === 'short_answer'" name="answer" :rows="state.question.educational_type === 'essay' ? 12 : state.question.educational_type === 'translation' ? 6 : 4" :disabled="responseDisabled" :value="String(answer ?? '')" @beforeinput="beforeTextInput" @input="updateText" @compositionstart="startComposition" @compositionend="finishComposition" @blur="flushTextInputOnBlur" />

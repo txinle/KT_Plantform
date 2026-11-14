@@ -333,6 +333,7 @@ def _auto_submit_saved_attempt_for_deadline(session, attempt, *, terminal_at):
                     snapshot.correct_answer,
                     attempt.draft_answer,
                     accepted_answers=snapshot.accepted_answers,
+                    question_text=snapshot.text,
                     max_score=snapshot.max_score,
                     case_sensitive=snapshot.text_match_case_sensitive,
                     absolute_tolerance=snapshot.absolute_tolerance,
@@ -1562,6 +1563,7 @@ def _submit_attempt_transaction(
     correct, score = score_payload(
         snapshot.question_type, snapshot.correct_answer, attempt.draft_answer,
         accepted_answers=snapshot.accepted_answers,
+        question_text=snapshot.text,
         max_score=snapshot.max_score,
         case_sensitive=snapshot.text_match_case_sensitive,
         absolute_tolerance=snapshot.absolute_tolerance,
