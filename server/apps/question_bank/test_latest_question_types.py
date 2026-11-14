@@ -41,7 +41,7 @@ class LatestQuestionContentTests(SimpleTestCase):
                                      image_files=_template_images(extension))
             self.assertTrue(all(not row['_errors'] for row in rows))
             self.assertEqual({row.get('题组形式') for row in rows if row.get('题组形式')}, {'reading', 'words', 'cloze'})
-            ordinary = [row for row in rows if not row.get('题组编号')]
+            ordinary = [row for row in rows if not row.get('题组编号') and row.get('题型')]
             self.assertEqual({row['题型'] for row in ordinary}, {'单选题', '多选题', '判断题', '填空题', '简答题', '数值题', '英汉互译', '作文题'})
 
     def test_latest_word_numbered_labels_keep_group_metadata(self):
@@ -91,21 +91,21 @@ class LatestQuestionPersistenceTests(TestCase):
                 args = dict(bank=bank, actor=self.teacher, session_key='latest-types')
                 preview = service.preview(**args, uploaded=SimpleUploadedFile(f'all.{extension}', content),
                                           image_files=_template_images(extension))
-                self.assertEqual(preview['preview']['summary'], {'ready': 22, 'draft': 0, 'invalid': 0, 'duplicate': 0})
+                self.assertEqual(preview['preview']['summary'], {'ready': 24, 'draft': 0, 'invalid': 0, 'duplicate': 0})
                 result = service.confirm(**args, preview_id=preview['preview_id'])
-                self.assertEqual(result['created'], 22)
+                self.assertEqual(result['created'], 24)
                 words = bank.groups.get(kind='words')
                 self.assertEqual(words.word_bank, ['condition', 'note', 'table', 'choose', 'share', 'quietly', 'journey'])
                 self.assertEqual(list(words.members.values_list('correct_answer', flat=True)), ['condition', 'note', 'table', 'choose', 'share'])
                 self.assertEqual(bank.questions.filter(educational_type='translation').first().question_type, 'short_answer')
                 self.assertEqual(str(bank.questions.get(educational_type='essay').max_score), '15.00')
                 self.assertEqual(bank.questions.filter(educational_type='translation').count(), 2)
-                self.assertEqual(bank.questions.get(question_type='numeric').absolute_tolerance, 0)
+                self.assertEqual(bank.questions.get(question_type='numeric', group__isnull=True).absolute_tolerance, 0)
                 self.assertEqual(bank.questions.get(educational_type='essay').title, 'A Useful School Activity')
                 self.assertIn('100–150', bank.questions.get(educational_type='essay').instructions)
                 duplicate = service.preview(**args, uploaded=SimpleUploadedFile(f'all.{extension}', content),
                                             image_files=_template_images(extension))
-                self.assertEqual(duplicate['preview']['summary']['duplicate'], 22)
+                self.assertEqual(duplicate['preview']['summary']['duplicate'], 24)
 
     def test_words_editor_enforces_vocabulary_and_preserves_member_kc_and_weight(self):
         import json

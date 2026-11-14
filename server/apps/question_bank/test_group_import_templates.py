@@ -64,7 +64,7 @@ class GroupTemplateDownloadTests(TestCase):
         self.teacher = User.objects.create_user(username='group-template', role='teacher')
         self.client.force_login(self.teacher)
 
-    def test_downloads_have_latest_twelve_complete_questions_with_exact_headers(self):
+    def test_unified_downloads_include_all_types_and_plain_multi_blank_rows(self):
         from .services.unified_reader import GROUP_HEADERS
         for extension in ('xlsx', 'csv', 'docx'):
             with self.subTest(extension=extension):
@@ -76,9 +76,18 @@ class GroupTemplateDownloadTests(TestCase):
                     images = [SimpleUploadedFile(name, archive.read(name)) for name in archive.namelist() if name.endswith('.png')]
                 rows = read_unified_rows(SimpleUploadedFile(f'groups.{extension}', content),
                                          image_files=images if extension == 'csv' else [])
-                self.assertEqual(len(rows), 22)
-                self.assertEqual(sum(row['题组编号'] == 'R001' for row in rows), 3)
-                self.assertEqual(sum(row['题组编号'] == 'C001' for row in rows), 5)
+                self.assertEqual(len(rows), 24)
+                self.assertEqual(sum(row.get('题组编号') == 'R001' for row in rows), 3)
+                self.assertEqual(sum(row.get('题组编号') == 'C001' for row in rows), 5)
+                from .services.multi_blank_import import expand_blank_rows
+                blanks = rows[-2:]
+                self.assertEqual(blanks[0]['题型'], '填空题')
+                self.assertFalse(blanks[1].get('题型'))
+                self.assertFalse(blanks[1].get('题目'))
+                self.assertFalse(any(row.get('题组编号') for row in blanks))
+                expanded = expand_blank_rows(blanks)
+                self.assertEqual([row['分值'] for row in expanded], ['2', '1'])
+                self.assertEqual([row['空位编号'] for row in expanded], ['b01', 'b02'])
                 self.assertTrue(all(not row['_errors'] for row in rows))
                 self.assertEqual(rows[0]['一级知识点'], 'KC1')
                 self.assertEqual(rows[0]['二级知识点'], 'KC2')

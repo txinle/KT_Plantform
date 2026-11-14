@@ -264,6 +264,51 @@ def _add_unsupported_object_errors(question: _QuestionRow, element, location: st
         question.add_error(message, location)
 
 
+def _read_header_table_rows(block, block_number, header_fields):
+    header_cells = block.rows[0].cells
+    headers = [_cell_text(cell).strip() for cell in header_cells]
+    break_before = True
+    for row_number, row in enumerate(block.rows[1:], start=2):
+        values = [_cell_text(cell) for cell in row.cells]
+        if not any(value.strip() for value in values):
+            break_before = True
+            continue
+        location = f"表格{block_number}第{row_number}行"
+        question = _QuestionRow(location)
+        question.row["_break_before"] = break_before
+        break_before = False
+        for column_number, cell in enumerate(header_cells, start=1):
+            _add_unsupported_object_errors(
+                question,
+                cell._tc,
+                f"表格{block_number}第1行第{column_number}列",
+            )
+        for column_number, (field, header, value) in enumerate(
+            zip(header_fields, headers, values), start=1
+        ):
+            cell_location = (
+                f"表格{block_number}第{row_number}行第{column_number}列"
+            )
+            if field is None:
+                question.add_error(
+                    f"无法识别的字段：{header}",
+                    cell_location,
+                )
+                _add_unsupported_object_errors(
+                    question, row.cells[column_number - 1]._tc, cell_location
+                )
+                continue
+            question.assign(
+                field,
+                value,
+                cell_location,
+            )
+            _add_unsupported_object_errors(
+                question, row.cells[column_number - 1]._tc, cell_location
+            )
+        yield question
+
+
 def _read_explicit_group_rows(document):
     rows, group_members = [], []
     metadata = None
@@ -278,8 +323,14 @@ def _read_explicit_group_rows(document):
             current = None
 
     for block_type, block, number in _body_blocks(document):
-        if block_type != 'paragraph':
-            raise ValueError('带题组开始／结束标签的 Word 请使用明确的段落标签，不支持混入表格布局。')
+        if block_type == 'table':
+            fields = _header_fields(block)
+            if metadata is not None or fields is None:
+                raise ValueError('表格必须放在题组结束之后，并包含题目、题型、答案等明确表头。')
+            finish_member()
+            for parsed in _read_header_table_rows(block, number, fields):
+                rows.append(parsed.as_dict(str(len(rows) + 1)))
+            continue
         text, location = block.text, f'第{number}段'
         if _is_template_preamble(text) and metadata is None and current is None:
             if _unsupported_object_errors(block._p):
@@ -449,47 +500,13 @@ def read_docx_rows(uploaded_file, *, image_files=()) -> list[dict[str, object]]:
         if block_type == "table":
             header_fields = _header_fields(block)
             if header_fields is not None:
-                header_cells = block.rows[0].cells
-                headers = [_cell_text(cell).strip() for cell in header_cells]
-                break_before = True
-                for row_number, row in enumerate(block.rows[1:], start=2):
-                    values = [_cell_text(cell) for cell in row.cells]
-                    if not any(value.strip() for value in values):
-                        break_before = True
-                        continue
-                    location = f"表格{block_number}第{row_number}行"
-                    question = start_question(location)
-                    question.row["_break_before"] = break_before
-                    break_before = False
-                    for column_number, cell in enumerate(header_cells, start=1):
-                        _add_unsupported_object_errors(
-                            question,
-                            cell._tc,
-                            f"表格{block_number}第1行第{column_number}列",
-                        )
-                    for column_number, (field, header, value) in enumerate(
-                        zip(header_fields, headers, values), start=1
-                    ):
-                        cell_location = (
-                            f"表格{block_number}第{row_number}行第{column_number}列"
-                        )
-                        if field is None:
-                            question.add_error(
-                                f"无法识别的字段：{header}",
-                                cell_location,
-                            )
-                            _add_unsupported_object_errors(
-                                question, row.cells[column_number - 1]._tc, cell_location
-                            )
-                            continue
-                        question.assign(
-                            field,
-                            value,
-                            cell_location,
-                        )
-                        _add_unsupported_object_errors(
-                            question, row.cells[column_number - 1]._tc, cell_location
-                        )
+                for parsed in _read_header_table_rows(block, block_number, header_fields):
+                    if question is not None:
+                        finish_question(question)
+                    question = parsed
+                    for message, error_location in pending_preamble_errors:
+                        question.add_error(message, error_location)
+                    pending_preamble_errors.clear()
                 continue
             field_value_table = any(
                 _canonical_label(_cell_text(row.cells[column_number]).strip()) is not None

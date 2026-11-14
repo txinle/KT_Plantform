@@ -125,6 +125,7 @@ describe('Teacher bank-management Vue views', () => {
     const wrapper = mount(TeacherQuestionImport, { global: { stubs: { RouterLink: routerLink } } })
     const input = wrapper.get('input[type="file"]')
     expect(wrapper.get('[data-question-template="xlsx"]').attributes('href')).toBe('/api/v1/teacher/import-templates/question-groups.xlsx')
+    expect(wrapper.findAll('a[href*="import-templates/question-groups."]')).toHaveLength(3)
     expect(wrapper.get('[data-question-template="docx"]').attributes('href')).toBe('/api/v1/teacher/import-templates/question-groups.docx')
     expect(input.attributes('accept')).toBe('.csv,.xlsx,.png,.jpg,.jpeg,.webp')
 

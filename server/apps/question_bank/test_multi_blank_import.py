@@ -115,25 +115,3 @@ class NumericFractionTests(SimpleTestCase):
         self.assertEqual(score_payload('numeric', '6', '6/1'), (True, Decimal('1')))
         for value in ('1/0', 'NaN', '1+5', '6 W'):
             self.assertEqual(score_payload('numeric', '6', value), (False, Decimal('0')))
-
-
-class SimpleBlankTemplateTests(TestCase):
-    def test_downloads_round_trip_the_same_two_rows_without_internal_group_columns(self):
-        from .services.unified_reader import read_unified_rows
-        from .services.multi_blank_import import expand_blank_rows
-        teacher = User.objects.create_user(username='blank-template', role='teacher')
-        self.client.force_login(teacher)
-        for extension in ('xlsx', 'csv', 'docx'):
-            with self.subTest(extension=extension):
-                response = self.client.get(f'/api/v1/teacher/import-templates/question-groups.{extension}?layout=blanks')
-                self.assertEqual(response.status_code, 200)
-                content = b''.join(response.streaming_content) if response.streaming else response.content
-                rows = read_unified_rows(SimpleUploadedFile(f'blanks.{extension}', content))
-                self.assertEqual(len(rows), 2)
-                self.assertFalse(rows[1].get('题型'))
-                self.assertFalse(rows[1].get('题目'))
-                self.assertFalse(any(row.get('题组编号') for row in rows))
-                expanded = expand_blank_rows(rows)
-                self.assertTrue(all(not row.get('_errors') for row in expanded), expanded)
-                self.assertEqual([row['分值'] for row in expanded], ['2', '1'])
-                self.assertEqual([row['空位编号'] for row in expanded], ['b01', 'b02'])

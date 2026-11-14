@@ -47,7 +47,7 @@ class ImageTemplateDownloadTests(TransactionTestCase):
             image_bytes = {name: archive.read(name) for name in archive.namelist() if name.endswith('.png')}
             self.assertEqual(len(image_bytes), 4)
             self.assertIn('同时', archive.read('README.txt').decode('utf-8-sig'))
-        for family, count in [('questions', 6), ('question-groups', 22)]:
+        for family, count in [('questions', 6), ('question-groups', 24)]:
             first_rows = []
             for extension in ('csv', 'xlsx', 'docx'):
                 with self.subTest(family=family, extension=extension):

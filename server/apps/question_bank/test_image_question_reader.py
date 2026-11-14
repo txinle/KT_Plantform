@@ -277,7 +277,7 @@ class ImageTemplateRoundtripTests(SimpleTestCase):
                                            for name in archive.namelist() if name.endswith('.png')]
                     rows = read_unified_rows(SimpleUploadedFile('template.' + extension, content),
                                              image_files=attachments)
-                    self.assertEqual(len(rows), 22 if family == 'latest' else 6)
+                    self.assertEqual(len(rows), 24 if family == 'latest' else 6)
                     self.assertTrue(all(not row['_errors'] for row in rows), rows[0]['_errors'])
                     self.assertIn('{{image:', rows[0]['题目'])
                     for label in 'ABCD':
