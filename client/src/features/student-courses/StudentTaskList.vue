@@ -12,6 +12,7 @@ import { getStudentCourseApi } from './api'
 import { studentTaskContext } from './task-context'
 import Icon from '@/design-system/Icon.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
+import ModalDialog from '@/design-system/components/ModalDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,6 +22,7 @@ if (!tasks) throw new Error('StudentTaskList requires its course layout.')
 const { response, loading, reload } = tasks
 const error = ref('')
 const pendingTaskId = ref<number>()
+const taskToStart = ref<StudentTask>()
 const search = ref('')
 const status = ref('all')
 const visibleTasks = computed(() => (response.value?.items || []).filter(task =>
@@ -44,8 +46,23 @@ function statusLabel(status: string) {
   return { scheduled: '未开始', open: '进行中', completed: '已完成', closed: '已结束', cancelled: '已取消' }[status] || status
 }
 
+function requestAction(task: StudentTask) {
+  if (pendingTaskId.value !== undefined) return
+  if (task.primary_action === 'start' && task.total_time_limit_seconds) {
+    taskToStart.value = task
+    return
+  }
+  void runAction(task)
+}
+
+function confirmStart() {
+  const task = taskToStart.value
+  taskToStart.value = undefined
+  if (task) void runAction(task)
+}
+
 async function runAction(task: StudentTask) {
-  if (!task.primary_action) return
+  if (!task.primary_action || pendingTaskId.value !== undefined) return
   if (task.primary_action === 'view_result') {
     await router.push(`/student/courses/${courseId.value}/learning/experiments/${task.experiment_id}/`)
     return
@@ -108,7 +125,7 @@ onMounted(() => {
         </div>
         <div class="kt-student-task-card-foot">
           <p>已完成 <strong>{{ task.progress.completed }} / {{ task.progress.total }}</strong></p>
-          <button v-if="task.primary_action" class="kt-button" type="button" :data-task-action="task.primary_action" :disabled="pendingTaskId === task.task_id" @click="runAction(task)">
+          <button v-if="task.primary_action" class="kt-button" type="button" :data-task-action="task.primary_action" :disabled="pendingTaskId !== undefined" @click="requestAction(task)">
             {{ pendingTaskId === task.task_id ? '处理中…' : actionLabel(task.primary_action) }}
           </button>
         </div>
@@ -118,5 +135,15 @@ onMounted(() => {
       <template v-if="response?.items.length"><h2>没有匹配的作业</h2><p>试试其他名称或状态。</p><button class="kt-button kt-button--secondary" type="button" @click="search = ''; status = 'all'">清除筛选</button></template>
       <template v-else><h2>暂无实验任务</h2><p>教师正式发布且包含你的任务会显示在这里。</p></template>
     </div>
+    <ModalDialog v-if="taskToStart" open title="开始实验确认" @close="taskToStart = undefined">
+      <p>{{ taskToStart?.experiment_name }}</p>
+      <p><strong>本次实验限时：{{ (taskToStart?.total_time_limit_seconds || 0) / 60 }} 分钟</strong></p>
+      <p>确认开始后即开始倒计时，退出页面不会暂停计时。请准备好后再开始。</p>
+      <p v-if="taskToStart?.closes_at">作业截止时间：{{ displayDate(taskToStart.closes_at) }}，到期将结束作答。</p>
+      <template #footer>
+        <button class="kt-button kt-button--secondary" type="button" data-cancel-start @click="taskToStart = undefined">暂不开始</button>
+        <button class="kt-button" type="button" data-confirm-start @click="confirmStart">确认开始</button>
+      </template>
+    </ModalDialog>
   </section>
 </template>

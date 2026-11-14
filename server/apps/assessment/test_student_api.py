@@ -140,6 +140,7 @@ class StudentApiFixtureMixin:
         closes_at=None,
         research_tools=None,
         confidence_mode=None,
+        total_time_limit_minutes=None,
     ):
         values = {
             "name": name,
@@ -159,6 +160,8 @@ class StudentApiFixtureMixin:
             values["research_tools"] = research_tools
         if confidence_mode is not None:
             values["confidence_mode"] = confidence_mode
+        if total_time_limit_minutes is not None:
+            values.update(time_mode=Experiment.TimeMode.TOTAL, total_time_limit_minutes=total_time_limit_minutes)
         experiment = Experiment.objects.create(**values)
         ExperimentSamplingKC.objects.create(
             experiment=experiment,
@@ -295,6 +298,20 @@ class StudentApiTestCase(StudentApiFixtureMixin, TestCase):
 
 
 class StudentTaskApiTests(StudentApiTestCase):
+    def test_task_list_exposes_frozen_limit_and_latest_schedule_without_starting(self):
+        experiment, task = self.publish_task(name='限时确认', feedback_mode=self.feedback_mode, total_time_limit_minutes=45)
+        self.client.force_login(self.student)
+        url = f'/api/v1/student/courses/{self.course.pk}/tasks/'
+        def listed():
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200)
+            return next(item for item in domain_payload(response)['items'] if item['task_id'] == task.pk)
+        before = list(task.sessions.values_list('pk', 'status', 'started_at'))
+        self.assertEqual(listed()['total_time_limit_seconds'], 2700)
+        append_schedule_revision(task, self.teacher, expected_revision=1, total_time_limit_minutes=60, reason='调整限时')
+        self.assertEqual(listed()['total_time_limit_seconds'], 3600)
+        self.assertEqual(list(task.sessions.values_list('pk', 'status', 'started_at')), before)
+
     def test_start_does_not_load_task_list_preview_or_duplicate_question_rows(self):
         with CaptureQueriesContext(connection) as queries:
             started = self.start()
@@ -428,6 +445,7 @@ class StudentTaskApiTests(StudentApiTestCase):
                 "primary_action",
                 "available_actions",
                 "feedback_mode",
+                "total_time_limit_seconds",
             },
         )
         self.assertEqual(item["task_id"], self.task.pk)
@@ -436,6 +454,7 @@ class StudentTaskApiTests(StudentApiTestCase):
         self.assertEqual(item["primary_action"], "start")
         self.assertEqual(item["available_actions"], ["start"])
         self.assertEqual(item["feedback_mode"], Experiment.Feedback.FULL)
+        self.assertIsNone(item["total_time_limit_seconds"])
 
         self.client.force_login(self.outsider)
         hidden = self.client.get(

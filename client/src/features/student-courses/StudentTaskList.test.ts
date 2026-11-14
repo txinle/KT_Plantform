@@ -28,6 +28,8 @@ async function mountTaskList() {
 describe('StudentTaskList', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+    HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
     mocks.api.tasks.mockResolvedValue({
       course: {
         course_id: 7,
@@ -49,8 +51,51 @@ describe('StudentTaskList', () => {
         primary_action: 'start',
         available_actions: ['start'],
         feedback_mode: 'correctness',
+        total_time_limit_seconds: null,
       }],
     })
+  })
+  it('starts a timed task only after confirmation, not after cancellation or dismissal', async () => {
+    const data = await mocks.api.tasks()
+    data.items[0].total_time_limit_seconds = 3600
+    mocks.api.tasks.mockResolvedValue(data)
+    mocks.api.start.mockResolvedValue({ session_id: 7, question_url: '/student/sessions/7/questions/11/' })
+    const wrapper = await mountTaskList()
+    const start = wrapper.get('[data-task-action="start"]')
+    await start.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('dialog[open]').text()).toContain('本次实验限时：60 分钟')
+    expect(mocks.api.start).not.toHaveBeenCalled()
+    await wrapper.get('[data-cancel-start]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('dialog[open]').exists()).toBe(false)
+    expect(mocks.api.start).not.toHaveBeenCalled()
+    await start.trigger('click')
+    await wrapper.get('dialog').trigger('cancel')
+    await flushPromises()
+    expect(wrapper.find('dialog[open]').exists()).toBe(false)
+    expect(mocks.api.start).not.toHaveBeenCalled()
+    await start.trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-confirm-start]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.start).toHaveBeenCalledExactlyOnceWith(19)
+    expect(mocks.push).toHaveBeenCalledWith('/student/sessions/7/questions/11/')
+    wrapper.unmount()
+  })
+
+  it('resumes a timed task without showing the start confirmation', async () => {
+    const data = await mocks.api.tasks()
+    Object.assign(data.items[0], { total_time_limit_seconds: 3600, primary_action: 'resume' })
+    mocks.api.tasks.mockResolvedValue(data)
+    mocks.api.resume.mockResolvedValue({ session_id: 7, question_url: '/student/sessions/7/questions/11/' })
+    const wrapper = await mountTaskList()
+    await wrapper.get('[data-task-action="resume"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('dialog[open]').exists()).toBe(false)
+    expect(mocks.api.start).not.toHaveBeenCalled()
+    expect(mocks.api.resume).toHaveBeenCalledExactlyOnceWith(19)
+    wrapper.unmount()
   })
 
   it('renders authoritative task progress without correctness state', async () => {

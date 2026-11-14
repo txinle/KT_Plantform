@@ -14,7 +14,13 @@ function django(script: string) {
 
 test('teacher returns one student assignment through the platform dialog and the student starts fresh', async ({ page, browser }, testInfo) => {
   test.setTimeout(120_000)
-  const fixture = django(`from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; c=Command(); c.course_term+='-return-${Date.now()}'; c._research_tools=lambda questions: {}; c.handle()`)
+  const fixture = django(`from apps.accounts.management.commands.seed_e2e_capture_v2 import Command
+from apps.experiments.models import Experiment
+from unittest.mock import patch
+create = Experiment.objects.create
+c=Command(); c.course_term+='-return-${Date.now()}'; c._research_tools=lambda questions: {}
+with patch.object(Experiment.objects, 'create', side_effect=lambda **values: create(**{**values, 'time_mode':'total', 'total_time_limit_minutes':60})):
+ c.handle()`)
   await page.goto('/login/')
   await page.getByLabel('账号或学号').fill('S002')
   await page.getByLabel('密码').fill('student123')
@@ -24,6 +30,22 @@ test('teacher returns one student assignment through the platform dialog and the
   await page.goto(`/student/courses/${fixture.course.id}/`)
   await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) })
     .getByRole('button', { name: '开始作业' }).click()
+  const startDialog = page.getByRole('dialog', { name: '开始实验确认', exact: true })
+  await expect(startDialog.getByText('本次实验限时：60 分钟', { exact: true })).toBeVisible()
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 720, height: 450 }]) {
+    await page.setViewportSize(viewport)
+    await expect(startDialog.getByRole('button', { name: '确认开始', exact: true })).toBeInViewport()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`timed-start-${viewport.width}.png`), fullPage: true })
+  }
+  await startDialog.getByRole('button', { name: '暂不开始', exact: true }).click()
+  expect(django(`import json; from apps.assessment.models import ExperimentSession; print(json.dumps({'started':ExperimentSession.objects.filter(class_task_id=${fixture.task_id},student_id=${fixture.student.id},started_at__isnull=False).exists()}))`).started).toBe(false)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.getByRole('button', { name: '开始作业' }).click()
+  await page.keyboard.press('Escape')
+  await expect(startDialog).not.toBeVisible()
+  await page.getByRole('button', { name: '开始作业' }).click()
+  await startDialog.getByRole('button', { name: '确认开始', exact: true }).click()
   await page.getByRole('radio').first().check()
   await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
   const oldUrl = page.url()
@@ -41,6 +63,9 @@ test('teacher returns one student assignment through the platform dialog and the
     await teacher.locator(`[data-assignment-return="${scope.task}"]`).click()
     const dialog = teacher.getByRole('dialog', { name: '作业打回', exact: true })
     await expect(dialog).toBeVisible()
+    await dialog.getByLabel('学生状态').selectOption('not_started')
+    await expect(dialog.getByText('没有找到匹配的学生。')).toBeVisible()
+    await dialog.getByLabel('学生状态').selectOption('in_progress')
     await dialog.getByRole('textbox', { name: '搜索学生' }).fill('S002')
     await dialog.getByRole('button', { name: '搜索', exact: true }).click()
     await expect(dialog.locator(`[data-return-select="${scope.participant}"]`)).toBeVisible()
@@ -80,6 +105,7 @@ test('teacher returns one student assignment through the platform dialog and the
     await page.goto(`/student/courses/${fixture.course.id}/`)
     await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'E2E Capture V2 五题回放', exact: true }) })
       .getByRole('button', { name: '开始作业' }).click()
+    await startDialog.getByRole('button', { name: '确认开始', exact: true }).click()
     await expect(page).not.toHaveURL(oldUrl)
     await expect(page.getByRole('radio').first()).not.toBeChecked()
     await page.getByRole('radio').nth(1).check()

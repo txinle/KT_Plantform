@@ -28,6 +28,7 @@ class StudentTaskSerializer(serializers.Serializer):
     business_status = serializers.CharField()
     opens_at = serializers.DateTimeField(allow_null=True)
     closes_at = serializers.DateTimeField(allow_null=True)
+    total_time_limit_seconds = serializers.IntegerField(allow_null=True)
     progress = StudentTaskProgressSerializer()
     primary_action = serializers.CharField(allow_null=True)
     available_actions = serializers.ListField(child=serializers.CharField())

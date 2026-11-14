@@ -9,6 +9,8 @@ const props = defineProps<{ experimentId: number; task: Pick<ClassTask, 'id' | '
 const emit = defineEmits<{ close: []; returned: [] }>()
 const api = getTeacherExperimentApi()
 const query = ref('')
+const status = ref('')
+const statusChoices = ref<CollectionParticipantCollection['status_choices']>([])
 const collection = ref<CollectionParticipantCollection>()
 const selected = ref<AssignmentReturnPreview>()
 const loading = ref(false)
@@ -24,8 +26,11 @@ async function search(page = 1) {
   collection.value = undefined
   error.value = ''
   try {
-    const result = await api.collectionParticipants(props.experimentId, { classId: props.task.class_id, query: query.value.trim(), page })
-    if (request === requestId) collection.value = result
+    const result = await api.collectionParticipants(props.experimentId, { classId: props.task.class_id, query: query.value.trim(), status: status.value, page })
+    if (request === requestId) {
+      collection.value = result
+      statusChoices.value = result.status_choices
+    }
   } catch (caught) {
     if (request === requestId) error.value = caught instanceof Error ? caught.message : '学生列表加载失败。'
   } finally { if (request === requestId) loading.value = false }
@@ -54,7 +59,7 @@ async function confirm() {
     success.value = `${target.display_name}（${target.student_number}）已恢复为未开始。请让学生刷新后从作业入口重新进入。`
     selected.value = undefined
     emit('returned')
-    await search(collection.value?.page.number || 1)
+    await search()
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : '打回结果未确认，请重试核验。'
   } finally { sending.value = false }
@@ -82,6 +87,7 @@ onBeforeUnmount(() => { requestId++ })
       <template v-else>
         <form class="kt-return-search" data-return-search @submit.prevent="search()">
           <label class="kt-picker-search">搜索学生<input v-model="query" placeholder="姓名或学号" :disabled="sending"></label>
+          <label class="kt-return-status">学生状态<select v-model="status" data-return-status :disabled="sending" @change="search()"><option value="">全部状态</option><option v-for="choice in statusChoices" :key="choice.value" :value="choice.value">{{ choice.label }}</option></select></label>
           <Button type="submit" :disabled="loading || sending">搜索</Button>
         </form>
         <p v-if="loading" role="status">正在核对学生记录…</p>
@@ -108,6 +114,9 @@ onBeforeUnmount(() => { requestId++ })
 <style scoped>
 .kt-return-search{display:flex;align-items:end;gap:12px;margin-bottom:18px}
 .kt-return-search .kt-picker-search{margin:0;min-width:0}
+.kt-return-status{display:grid;gap:6px;flex:0 0 140px;font-size:13px;min-width:0}
+.kt-return-status select{box-sizing:border-box;width:100%;min-height:44px;border:1px solid #d9e1ec;border-radius:6px;padding:10px 12px;font:inherit;color:inherit;background:#fff}
+@media(max-width:600px){.kt-return-search{flex-wrap:wrap}.kt-return-search .kt-picker-search{flex:1 1 100%}.kt-return-status{flex:1}}
 .kt-return-students{list-style:none;margin:0;padding:0}
 .kt-return-students li{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid #e3e9f0}
 .kt-return-students li>div,.kt-return-person{display:grid;gap:6px;min-width:0;overflow-wrap:anywhere}

@@ -6495,6 +6495,7 @@ export interface components {
             opens_at: string | null;
             /** Format: date-time */
             closes_at: string | null;
+            total_time_limit_seconds: number | null;
             progress: components["schemas"]["StudentTaskProgress"];
             primary_action: string | null;
             available_actions: string[];

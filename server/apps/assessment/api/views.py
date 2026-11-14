@@ -148,6 +148,10 @@ def _student_task_queryset(student, *, course_id=None, include_projection=True):
 
 def _task_projection(task, *, course):
     schedule = next(iter(task.latest_schedule_revisions), None)
+    configuration = task.release_snapshot.configuration
+    total_limit = int(configuration.get("total_time_limit_minutes") or 0) * 60
+    if schedule is not None and schedule.total_time_limit_seconds is not None:
+        total_limit = schedule.total_time_limit_seconds
     session = next(iter(task.current_student_sessions), None)
     if session is not None:
         session.version = task.release_snapshot
@@ -197,6 +201,7 @@ def _task_projection(task, *, course):
         "business_status": business_status,
         "opens_at": schedule.opens_at if schedule is not None else None,
         "closes_at": schedule.closes_at if schedule is not None else None,
+        "total_time_limit_seconds": total_limit or None,
         "progress": {"completed": completed, "total": total},
         "primary_action": primary_action,
         "available_actions": available_actions,

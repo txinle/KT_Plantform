@@ -25915,6 +25915,9 @@ components:
           type: string
           format: date-time
           nullable: true
+        total_time_limit_seconds:
+          type: integer
+          nullable: true
         progress:
           $ref: '#/components/schemas/StudentTaskProgress'
         primary_action:
@@ -25938,6 +25941,7 @@ components:
       - primary_action
       - progress
       - task_id
+      - total_time_limit_seconds
     StudentTaskCollection:
       type: object
       properties:
