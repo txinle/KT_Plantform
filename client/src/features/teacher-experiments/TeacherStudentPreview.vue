@@ -7,6 +7,7 @@ import { getBootstrapContext } from '@/app/bootstrap'
 import AppHeader from '@/design-system/components/AppHeader.vue'
 import QuestionGroupContent from '@/question-content/QuestionGroupContent.vue'
 import QuestionContent from '@/question-content/QuestionContent.vue'
+import LegacyBlankInputs from '@/assessment-runtime/LegacyBlankInputs.vue'
 import { hasQuestionImage } from '@/question-content/question-content'
 import type { GroupActivationIntent, GroupAnswerChange } from '@/question-content/question-group-content'
 import { getTeacherExperimentApi, type StudentPreviewUnit, type TeacherStudentPreview } from './api'
@@ -96,6 +97,7 @@ onMounted(async () => {
             <div v-else-if="question" class="kt-assessment-article">
               <h2 v-if="question.title">{{ question.title }}</h2><p v-if="question.instructions" data-question-instructions><QuestionContent :text="question.instructions" :images="question.images" /></p><p class="kt-assessment-stem"><QuestionContent :text="question.text" :images="question.images" /></p>
               <fieldset v-if="['single_choice', 'multiple_choice', 'true_false'].includes(question.question_type)" :class="{ 'kt-assessment-choices--images': question.options.some(option => hasQuestionImage(option.text)) }"><legend class="kt-visually-hidden">请选择答案</legend><label v-for="option in question.options" :key="option.key" class="kt-assessment-option"><input name="preview-answer" :type="question.question_type === 'multiple_choice' ? 'checkbox' : 'radio'" :value="option.key" :disabled="finished" :checked="question.question_type === 'multiple_choice' ? Array.isArray(answer) && answer.includes(option.key) : answer === option.key" @change="question.question_type === 'multiple_choice' ? toggle(option.key, ($event.target as HTMLInputElement).checked) : update(option.key)"><strong>{{ option.key }}</strong><QuestionContent :text="option.text" :images="question.images" option /></label></fieldset>
+              <LegacyBlankInputs v-else-if="(question.answer_blank_count || 0) > 1" :key="question.item_key" :count="question.answer_blank_count!" :value="String(answer ?? '')" :disabled="finished" @input="update($event.target.value)" @compositionend="update($event.target.value)" />
               <label v-else class="kt-assessment-text-answer"><span>{{ question.educational_type === 'essay' ? '你的作文' : question.educational_type === 'translation' ? '你的译文' : '你的答案' }}</span><textarea v-if="question.question_type === 'short_answer'" :rows="question.educational_type === 'essay' ? 12 : question.educational_type === 'translation' ? 6 : 4" :value="String(answer ?? '')" :disabled="finished" @input="update(($event.target as HTMLTextAreaElement).value)" /><input v-else :inputmode="question.question_type === 'numeric' ? 'decimal' : undefined" :value="String(answer ?? '')" :disabled="finished" @input="update(($event.target as HTMLInputElement).value)"></label>
               <button class="kt-text-button kt-preview-clear" type="button" :disabled="finished || !hasAnswer(answer)" @click="update('')">清除作答</button>
             </div>

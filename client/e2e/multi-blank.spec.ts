@@ -154,7 +154,7 @@ test('multi-blank simple import preserves two scores, inputs, feedback and expor
   expect(JSON.parse(check.stdout)).toEqual({ files: 8, answers: ['-0.5', '6/1'], correct: ['是', '是'], ids: 2, blanks: ['b01', 'b02'], weights: ['2.00', '1.00'] })
 })
 
-test('legacy published two-blank question restores separate inputs and retains one submission', async ({ page }, info) => {
+test('legacy published two-blank question restores separate inputs and retains one submission', async ({ page, browser }, info) => {
   test.setTimeout(180_000)
   const fixture = JSON.parse(django(['shell', '-c', `import apps.question_bank.management.commands.seed_e2e_english_groups as m; m.COURSE_TERM='legacy-${Date.now()}'; m.STANDALONE_BANK+='-legacy-${Date.now()}'; m.Command().handle()`]).trim().split('\n').at(-1)!)
   django(['shell', '-c', [
@@ -173,6 +173,29 @@ test('legacy published two-blank question restores separate inputs and retains o
     'p.refresh_from_db()',
     'commit_publish_plan(p,e.owner,expected_revision=p.plan_revision)',
   ].join('\n')])
+  const previewContext = await browser.newContext({ baseURL: 'http://127.0.0.1:8000' })
+  try {
+    const preview = await previewContext.newPage()
+    await login(preview, fixture.teacher)
+    const studentWrites: string[] = []
+    preview.on('request', request => {
+      if (request.method() === 'POST' && /\/api\/v1\/(student|assessment)\//.test(request.url())) studentWrites.push(request.url())
+    })
+    await preview.goto(`/teacher/courses/${fixture.course_id}/experiments/${fixture.course_experiment_id}/student-preview/`)
+    const fields = preview.locator('[data-legacy-answer-area] input')
+    await expect(fields).toHaveCount(2)
+    await fields.nth(0).fill('-0.5')
+    await fields.nth(1).fill('6')
+    for (const [width, height] of [[1440, 900], [390, 844], [720, 450]]) {
+      await preview.setViewportSize({ width: width!, height: height! })
+      expect(await preview.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+      await preview.screenshot({ path: info.outputPath(`legacy-teacher-preview-${width}.png`), fullPage: true })
+    }
+    await preview.getByRole('button', { name: '清除作答', exact: true }).click()
+    await expect(fields.nth(0)).toHaveValue('')
+    await expect(fields.nth(1)).toHaveValue('')
+    expect(studentWrites).toEqual([])
+  } finally { await previewContext.close() }
   await login(page, fixture.student)
   await acceptResearchConsentIfRequired(page)
   await page.goto(`/student/courses/${fixture.course_id}/`)

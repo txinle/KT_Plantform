@@ -54,6 +54,21 @@ class TeacherStudentPreviewTests(TestCase):
         self.assertEqual(payload["units"][0]["group"]["material"], "A frozen garden.")
         self.assertEqual(self.client.post(self.url(experiment), {}, content_type="application/json").status_code, 405)
 
+    def test_legacy_blank_count_is_shared_by_draft_and_frozen_preview(self):
+        question = self.bank.questions.get(group__isnull=True)
+        question.text = 'Io=____ mA；控制系数的量纲为____。'
+        question.correct_answer = '-8；无量纲'
+        question.save(update_fields=['text', 'correct_answer'])
+        draft = Experiment.objects.create(course=self.course, owner=self.teacher, question_bank=self.bank,
+            name='多空预览', selection_mode='all', sampling_mode=None)
+        payload = self.assert_preview_is_read_only(draft)
+        self.assertEqual(payload['units'][1]['question']['answer_blank_count'], 2)
+        self.assertEqual(payload['units'][0]['group']['members'][0]['answer_blank_count'], 0)
+        published, _ = fixture.GroupSnapshotTests.publish(self)
+        question.text = '后来改为一个空____。'
+        question.save(update_fields=['text'])
+        self.assertEqual(self.assert_preview_is_read_only(published)['units'][1]['question']['answer_blank_count'], 2)
+
     def test_preview_requires_the_course_manage_permission(self):
         experiment = Experiment.objects.create(course=self.course, owner=self.teacher, name="未配置实验")
         outsider = User.objects.create_user(username="preview-outsider", role="teacher")

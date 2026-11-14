@@ -19,6 +19,26 @@ describe('TeacherStudentPreview', () => {
     mocks.api.studentPreview.mockResolvedValue({ experiment_id: 13, experiment_name: '模拟实验', source: 'frozen', units: [choice, essay] })
   })
 
+  it('uses separate legacy blank inputs and restores or clears their local answers', async () => {
+    const blank = { key: 'item-3', kind: 'fill_blank', maximum_score: '1.00', group: null,
+      question: { item_key: '3', question_type: 'fill_blank', text: 'Io=____ mA；量纲____。', options: [], answer_blank_count: 2 } }
+    mocks.api.studentPreview.mockResolvedValue({ experiment_id: 13, experiment_name: '多空模拟', source: 'frozen', units: [blank, essay] })
+    const wrapper = mount(TeacherStudentPreview)
+    try {
+      await flushPromises()
+      expect(wrapper.findAll('[data-legacy-answer-area] input')).toHaveLength(2)
+      await wrapper.get('input[aria-label="第 1 空"]').setValue('-8')
+      await wrapper.get('input[aria-label="第 2 空"]').setValue('无量纲')
+      await wrapper.get('[data-next-question]').trigger('click')
+      await wrapper.get('[data-previous-question]').trigger('click')
+      expect(wrapper.get<HTMLInputElement>('input[aria-label="第 1 空"]').element.value).toBe('-8')
+      expect(wrapper.get<HTMLInputElement>('input[aria-label="第 2 空"]').element.value).toBe('无量纲')
+      await wrapper.get('.kt-preview-clear').trigger('click')
+      expect(wrapper.findAll<HTMLInputElement>('[data-legacy-answer-area] input').map(input => input.element.value)).toEqual(['', ''])
+      expect(mocks.api.studentPreview).toHaveBeenCalledTimes(1)
+    } finally { wrapper.unmount() }
+  })
+
   it('keeps simulated answers in memory and ends with explicit return and restart actions', async () => {
     const wrapper = mount(TeacherStudentPreview, { attachTo: document.body })
     await flushPromises()

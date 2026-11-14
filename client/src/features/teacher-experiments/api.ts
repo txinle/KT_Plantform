@@ -130,6 +130,7 @@ export type ManualGradeResponse = {
 }
 
 export interface StudentPreviewQuestion extends GroupMemberView {
+  answer_blank_count?: number
   educational_type: string
   title: string
   instructions: string
