@@ -94,6 +94,25 @@ class CaptureV2Tests(TestCase):
         with self.assertRaises(ProcessRequestError):
             self.ingest([operation])
 
+    def test_navigation_commit_preserves_capture_provenance_and_idempotency(self):
+        self.stream = uuid.uuid4()
+        attempt = self.attempts[Question.Type.FILL_BLANK]
+        event = self.transition(attempt, '', '-10；西门子', sequence=2)
+        event['payload']['input_type'] = 'navigationCommit'
+        operation = copy.deepcopy(event)
+        operation.update(event_id=str(uuid.uuid4()), event_type='input_operation', client_sequence_no=1)
+        operation['payload'] = {key: event['payload'][key] for key in (
+            'capture_version', 'operation_id', 'branch_id', 'parent_event_id', 'input_type')}
+        operation['payload'].update(composition='none', selection_start=None, selection_end=None)
+        receipt = self.ingest([operation, event])
+        self.assertEqual(receipt, self.ingest([operation, event]))
+        for row in (operation, event):
+            saved = AssessmentEvent.objects.get(event_id=row['event_id'])
+            self.assertEqual(saved.payload['input_type'], 'navigationCommit')
+            self.assertEqual(saved.payload['operation_id'], event['payload']['operation_id'])
+        self.assertEqual(AssessmentEvent.objects.filter(event_type='response_transition').count(), 1)
+        self.assertEqual(AssessmentEvent.objects.filter(event_type='input_operation').count(), 1)
+
     def test_idempotent_replay_and_conflicting_event_id(self):
         from .event_batch_services import ProcessConflictError
         self.stream = uuid.uuid4()

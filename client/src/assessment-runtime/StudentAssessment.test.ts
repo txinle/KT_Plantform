@@ -475,6 +475,132 @@ describe('StudentAssessment', () => {
       expect(mocks.api.saveDraft.mock.calls[0]![1]).toBe('需求分析')
     } finally { wrapper.unmount() }
   })
+  it.each(['normal', 'delayed-end', 'missing-end', 'late-composing-input'] as const)(
+    'replays multi-blank mobile IME events without inventing capture records: %s', async sequence => {
+      vi.useFakeTimers()
+      const dto = captureV2Question({ draft_answer: '-10；', remaining_seconds: 600,
+        question: { ...questionState.question, question_type: 'fill_blank', answer_blank_count: 2, options: [] } })
+      mocks.api.question.mockResolvedValue({ ...dto, process: { ...dto.process,
+        save_and_leave: { version: 1 }, text_capture_policy: { id: 'stable-input-v1', idle_ms: 1000 } } })
+      const wrapper = mount(StudentAssessment, { attachTo: document.body })
+      try {
+        await flushPromises()
+        mocks.runtime.record.mockClear()
+        const input = wrapper.get<HTMLInputElement>('[aria-label="第 2 空"]')
+        input.element.focus()
+        await input.trigger('compositionstart')
+        input.element.value = '西门子'
+        await input.trigger('input', { inputType: 'insertCompositionText', isComposing: true })
+        await vi.advanceTimersByTimeAsync(1500)
+        const transitions = () => mocks.runtime.record.mock.calls.filter(row => row[0] === 'response_transition')
+        const operations = () => mocks.runtime.record.mock.calls.filter(row => row[0] === 'input_operation')
+        expect(transitions()).toHaveLength(0)
+        expect(mocks.api.saveDraft).not.toHaveBeenCalled()
+        if (sequence === 'normal' || sequence === 'late-composing-input') await input.trigger('compositionend')
+        if (sequence === 'late-composing-input') {
+          await input.trigger('input', { inputType: 'insertCompositionText', isComposing: true })
+        }
+        input.element.blur()
+        await flushPromises()
+        if (sequence !== 'normal') {
+          expect(wrapper.text()).toContain('输入法尚未确认，请完成输入后重试。')
+          expect(transitions()).toHaveLength(0)
+        }
+        if (sequence === 'delayed-end') {
+          await vi.advanceTimersByTimeAsync(50)
+          await input.trigger('compositionend')
+        }
+        if (sequence === 'missing-end') {
+          // Even an explicit non-composing input cannot currently clear the latched state.
+          await input.trigger('input', { inputType: 'insertText', isComposing: false })
+        }
+        await vi.advanceTimersByTimeAsync(1500)
+        await flushPromises()
+        expect(wrapper.get<HTMLInputElement>('[aria-label="第 1 空"]').element.value).toBe('-10')
+        expect(input.element.value).toBe('西门子')
+        if (sequence === 'normal' || sequence === 'delayed-end') {
+          expect(transitions()).toHaveLength(1)
+          expect(operations()).toHaveLength(1)
+          expect(mocks.api.saveDraft).toHaveBeenCalledOnce()
+          expect(mocks.api.saveDraft.mock.calls[0]![1]).toBe('-10；西门子')
+          expect(wrapper.text()).not.toContain('输入法尚未确认')
+        } else {
+          await input.trigger('blur')
+          await flushPromises()
+          expect(wrapper.text()).toContain('输入法尚未确认')
+          expect(transitions()).toHaveLength(0)
+          expect(operations()).toHaveLength(0)
+          expect(mocks.api.saveDraft).not.toHaveBeenCalled()
+          const candidates = [...mocks.metadata.entries()].filter(([key]) => key.startsWith('text-candidate:'))
+          expect(candidates).toHaveLength(1)
+          expect(candidates[0]![1]).toMatchObject({ value: '-10；西门子', composing: true })
+          await wrapper.get('[data-nav-assignment="12"]').trigger('click')
+          await vi.advanceTimersByTimeAsync(0)
+          await flushPromises()
+          expect(mocks.api.saveAndLeave).toHaveBeenCalledOnce()
+          expect(mocks.runtime.prepareNavigation).toHaveBeenCalledOnce()
+          expect(mocks.push).toHaveBeenCalledOnce()
+          expect(transitions()).toHaveLength(1)
+          expect(operations()).toHaveLength(1)
+          expect(operations()[0]![1]).toMatchObject({ input_type: 'navigationCommit', composition: 'none' })
+          expect(await transitions()[0]![2].materialize()).toMatchObject({ after_state: { value: '-10；西门子' } })
+          expect(wrapper.text()).not.toContain('输入法尚未确认')
+        }
+      } finally { wrapper.unmount() }
+    },
+  )
+
+  it.each(['empty-second', 'final-dom', 'capture-fails', 'remote-fails'] as const)(
+    'preserves navigation answers and capture ordering at IME boundary: %s', async scenario => {
+      vi.useFakeTimers()
+      const dto = captureV2Question({ draft_answer: '', remaining_seconds: 600,
+        question: { ...questionState.question, question_type: 'fill_blank', answer_blank_count: 2, options: [] } })
+      mocks.api.question.mockResolvedValue({ ...dto, process: { ...dto.process,
+        save_and_leave: { version: 1 }, text_capture_policy: { id: 'stable-input-v1', idle_ms: 1000 } } })
+      const wrapper = mount(StudentAssessment, { attachTo: document.body })
+      try {
+        await flushPromises()
+        mocks.runtime.record.mockClear()
+        const first = wrapper.get<HTMLInputElement>('[aria-label="第 1 空"]')
+        const second = wrapper.get<HTMLInputElement>('[aria-label="第 2 空"]')
+        first.element.focus()
+        await first.trigger('compositionstart')
+        first.element.value = '-10'
+        await first.trigger('input', { inputType: 'insertCompositionText', isComposing: true })
+        second.element.focus()
+        await flushPromises()
+        if (scenario === 'final-dom') second.element.value = '西门子'
+        if (scenario === 'capture-fails') mocks.runtime.record.mockImplementation(async type => {
+          if (type === 'response_transition') throw new Error('capture storage failed')
+          return {}
+        })
+        if (scenario === 'remote-fails') mocks.api.saveAndLeave.mockRejectedValueOnce(new Error('network failed'))
+        await wrapper.get('[data-nav-assignment="12"]').trigger('click')
+        await vi.advanceTimersByTimeAsync(0)
+        await flushPromises()
+        const transition = mocks.runtime.record.mock.calls.find(row => row[0] === 'response_transition')!
+        expect(await transition[2].materialize()).toMatchObject({ after_state: { value: scenario === 'final-dom' ? '-10；西门子' : '-10；' } })
+        expect(mocks.runtime.record.mock.calls.filter(row => row[0] === 'input_operation')).toHaveLength(1)
+        if (scenario === 'capture-fails') {
+          expect(mocks.api.saveAndLeave).not.toHaveBeenCalled()
+          expect(mocks.push).not.toHaveBeenCalled()
+          expect(wrapper.text()).toContain('capture storage failed')
+          expect(first.element.value).toBe('-10')
+        } else if (scenario === 'remote-fails') {
+          expect(mocks.api.saveAndLeave).toHaveBeenCalledOnce()
+          expect(mocks.push).not.toHaveBeenCalled()
+          expect(mocks.runtime.freezeNavigationSnapshot).toHaveBeenCalledWith(expect.objectContaining({ toAssignmentId: 12 }))
+          expect(mocks.runtime.saveNavigationIntent).not.toHaveBeenCalledWith(null)
+          expect(first.element.value).toBe('-10')
+        } else {
+          expect(mocks.api.saveAndLeave).toHaveBeenCalledOnce()
+          expect(mocks.push).toHaveBeenCalledOnce()
+          expect(mocks.runtime.record.mock.invocationCallOrder.at(-1)!).toBeLessThan(mocks.runtime.prepareNavigation.mock.invocationCallOrder[0]!)
+        }
+      } finally { wrapper.unmount() }
+    },
+  )
+
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.routeQuery = {}

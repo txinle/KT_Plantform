@@ -672,9 +672,33 @@ function handleLocalInputError(caught: unknown) {
   error.value = `无法持久化作答材料：${caught instanceof Error ? caught.message : '存储不可用'}。请勿关闭本页。`
 }
 
+function visibleTextFields() {
+  return Array.from(questionBody.value?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input[name="answer"], textarea[name="answer"]') || [])
+}
+
+function syncVisibleTextAnswer(fields: ReturnType<typeof visibleTextFields>) {
+  if (!fields.length) return
+  const values = fields.map(field => field.value)
+  const value = fields.length === 1 ? values[0]! : values.some(part => part.trim().length) ? values.join('；') : ''
+  if (value !== answer.value) invalidateInlineConfidence()
+  answer.value = value
+  return value
+}
+
 async function flushAnswerBoundary(reason: TextFlushReason) {
   if (stableTextInput) {
-    if (composing) {
+    if (reason === 'navigation') {
+      const fields = visibleTextFields()
+      const active = document.activeElement
+      if (fields.some(field => field === active)) (active as HTMLInputElement | HTMLTextAreaElement).blur()
+      // Allow the browser's blur/IME completion events to run before freezing the visible answer.
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      const value = syncVisibleTextAnswer(fields)
+      if (value !== undefined) {
+        stableTextInput.commitNavigationValue(value)
+        composing = false
+      }
+    } else if (composing) {
       const active = document.activeElement
       if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.blur()
       await nextTick()
@@ -865,6 +889,8 @@ async function navigate(
 
 async function navigateToAssignment(item: StudentRuntimeQuestionEntry['navigation'][number]) {
   if (!interactionAllowed() || item.current || !state.value || actionBusy.value || paperConfirmOpen.value || paperSubmission.value || navigationUncertain.value) return
+  // Preserve DOM text before the busy render disables inputs and reapplies their bound values.
+  if (stableTextInput && !answerLocked.value) syncVisibleTextAnswer(visibleTextFields())
   navigating.value = true
   processRuntime?.setOperationId?.(beginAssessmentOperation('navigation'))
   if (!pendingNavigationClick || pendingNavigationClick.assignmentId !== item.assignment_id) {
@@ -885,6 +911,7 @@ async function navigateToAssignment(item: StudentRuntimeQuestionEntry['navigatio
       await navigate(item.url, true, 'navigation_click', navigation)
       return
     }
+    await flushAnswerBoundary('navigation')
     await flushTextObservation()
     if (!answerLocked.value) await saveDraft(true)
     await closeAttemptAndRelease('navigation', item.assignment_id)

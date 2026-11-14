@@ -2,6 +2,44 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { createStableTextInput, type TextCandidate } from './stable-text-input'
 
 afterEach(() => vi.useRealTimers())
+
+it('commits a stuck IME at navigation once, using the final visible value and explicit provenance', async () => {
+  vi.useFakeTimers()
+  const f = fixture('-10；')
+  f.input.compositionStart()
+  f.input.update('-10；xi', 'insertCompositionText', true)
+  await expect(f.input.flush('blur')).rejects.toMatchObject({ code: 'input_composition_pending' })
+  f.input.commitNavigationValue('-10；西门子')
+  await f.input.flush('navigation')
+  expect(f.record).toHaveBeenCalledExactlyOnceWith('-10；西门子', 'navigationCommit', expect.any(String), false)
+  f.input.compositionEnd('-10；西门子')
+  f.input.update('-10；西门子', 'insertCompositionText', true)
+  await f.input.flush('navigation')
+  expect(f.record).toHaveBeenCalledOnce()
+  f.input.compositionStart()
+  f.input.update('-10；西', 'insertCompositionText', true)
+  await expect(f.input.flush('blur')).rejects.toMatchObject({ code: 'input_composition_pending' })
+  f.input.compositionEnd('-10；西')
+  await f.input.flush('navigation')
+  expect(f.record).toHaveBeenCalledTimes(2)
+  f.input.dispose()
+})
+
+it('does not invent input for an untouched empty blank or bypass failed capture writes', async () => {
+  vi.useFakeTimers()
+  const f = fixture('-10；')
+  f.input.commitNavigationValue('-10；')
+  await f.input.flush('navigation')
+  expect(f.record).not.toHaveBeenCalled()
+  f.input.compositionStart()
+  f.input.update('-10；西门子', 'insertCompositionText', true)
+  f.input.commitNavigationValue('-10；西门子')
+  f.record.mockRejectedValueOnce(new Error('storage failed'))
+  await expect(f.input.flush('navigation')).rejects.toThrow('storage failed')
+  expect(f.save).not.toHaveBeenCalled()
+  expect(f.persisted.at(-1)).toMatchObject({ value: '-10；西门子' })
+  f.input.dispose()
+})
 function fixture(initialValue = '') {
   const persisted: Array<TextCandidate | null> = []
   const record = vi.fn<(value: string, inputType: string, operationId: string, cancelled: boolean) => Promise<void>>(async () => undefined)

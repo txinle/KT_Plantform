@@ -17,6 +17,7 @@ export function createStableTextInput(options: Options) {
   let generation = 0
   let composing = false
   let hadComposition = false
+  let navigationCommittedValue: string | undefined
   let inputType = ''
   let disposed = false
   let idle: ReturnType<typeof setTimeout> | undefined
@@ -79,6 +80,8 @@ export function createStableTextInput(options: Options) {
   return {
     update(next: string, type: string, isComposing: boolean) {
       if (disposed) return
+      if (navigationCommittedValue !== undefined && next === navigationCommittedValue) return
+      navigationCommittedValue = undefined
       value = next
       generation++
       composing ||= isComposing
@@ -88,12 +91,15 @@ export function createStableTextInput(options: Options) {
       scheduleIdle()
     },
     compositionStart() {
+      navigationCommittedValue = undefined
       composing = true
       hadComposition = true
       clearIdle()
       queueLocal()
     },
     compositionEnd(next: string) {
+      if (navigationCommittedValue !== undefined && next === navigationCommittedValue) return
+      navigationCommittedValue = undefined
       composing = false
       hadComposition = true
       value = next
@@ -101,6 +107,14 @@ export function createStableTextInput(options: Options) {
       generation++
       queueLocal()
       scheduleIdle()
+    },
+    commitNavigationValue(next: string) {
+      if (disposed || (!composing && next === value)) return
+      composing = false
+      value = next
+      generation++
+      inputType = 'navigationCommit'
+      navigationCommittedValue = next
     },
     flush,
     resume() {
