@@ -487,7 +487,7 @@ test('navigation drains more than 100 offline transitions and replays a lost res
   await attachStageTimings(page, testInfo, 'backlog-navigation-recovery')
 })
 
-test('history question links recover the original uncertain navigation and allow returning to the list', async ({ page }, testInfo) => {
+test('history question links recover the original uncertain navigation and allow returning to the list', async ({ page, browserName }, testInfo) => {
   test.setTimeout(120_000)
   const fixture = django(['shell', '-c', `from apps.accounts.management.commands.seed_e2e_capture_v2 import Command; command=Command(); command.course_term+='-history-${Date.now()}'; command._research_tools=lambda questions: {}; command.handle()`])
   await page.goto('/login/')
@@ -529,9 +529,17 @@ test('history question links recover the original uncertain navigation and allow
     client_time_origin: '2026-10-20T01:59:00Z' }).toString()
   const entering = page.waitForRequest(request => request.method() === 'POST'
     && new URL(request.url()).pathname === `/api/v1/student/sessions/${sessionId}/questions/${firstId}/`)
+  let releasePreparation!: () => void
+  const preparationGate = new Promise<void>(resolve => { releasePreparation = resolve })
+  if (browserName === 'chromium') await page.route('**/api/v1/auth/offline-preparation/', async route => {
+    await preparationGate
+    await route.continue()
+  })
   await page.goto(historyUrl.toString())
   expect((await entering).postDataJSON().reason).toBe('resume')
   await expect(page.locator('[data-navigation-retry]')).toBeVisible()
+  if (browserName === 'chromium') await expect(page.locator('[data-navigation-retry]')).toBeDisabled()
+  releasePreparation()
   await page.locator('[data-navigation-retry]').click()
   await expect(page).toHaveURL(new RegExp(`/questions/${nextId}/`))
   await expect(page.locator('[name=answer]').first()).toBeEnabled()

@@ -1036,6 +1036,7 @@ async function saveAndLeave(item: StudentRuntimeQuestionEntry['navigation'][numb
 }
 
 async function recoverNavigation() {
+  if (!interactionAllowed()) return
   const intent = pendingNavigation.value
   const item = state.value?.navigation.find((row) => row.assignment_id === (intent?.toAssignmentId ?? pendingNavigationClick?.assignmentId))
   if (!item || transitionBusy.value) return
@@ -1950,7 +1951,7 @@ onBeforeUnmount(() => {
             </div>
           </section>
           <p v-if="error" class="kt-alert kt-alert--danger" role="alert">{{ error }}</p>
-          <button v-if="navigationUncertain" type="button" class="kt-button" data-navigation-retry :disabled="actionBusy" @click="recoverNavigation">重新核验切题保存结果</button>
+          <button v-if="navigationUncertain" type="button" class="kt-button" data-navigation-retry :disabled="actionBusy || !captureReady" @click="recoverNavigation">重新核验切题保存结果</button>
           <button v-if="trajectory && online && captureReady && !answerLocked && saveStatus.includes('失败')" class="kt-button kt-button--secondary" type="button" @click="saveDraft(true).catch(() => undefined)">重试同步</button>
           <section v-if="responseConflict" class="kt-alert kt-alert--warning" aria-label="选择答案版本">
             <p>另一设备保存了不同答案。请选择接下来使用的版本。</p>

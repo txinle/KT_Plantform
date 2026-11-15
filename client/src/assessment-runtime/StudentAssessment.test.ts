@@ -1262,7 +1262,7 @@ describe('StudentAssessment', () => {
     } finally { wrapper.unmount() }
   })
 
-  it('restores an uncertain navigation snapshot and replays it even after the capability is disabled', async () => {
+  it.each([false, true])('restores uncertain navigation after preparation (delayed: %s)', async delayed => {
     const captured = captureV2Question()
     const restored = { token: 'restored-navigation', clickedAt: '2026-10-11T14:00:00Z',
       toAssignmentId: 12, leaveEventId: 'left-event', head: 'old-head', expectedResponseVersion: 2,
@@ -1270,8 +1270,17 @@ describe('StudentAssessment', () => {
       processSnapshot: { client_instance_id: 'old-client', event_boundary: 3, events: [], checkpoints: [] } }
     mocks.api.question.mockResolvedValue(captured)
     mocks.createProcessRuntime.mockResolvedValue({ ...mocks.runtime, restoredNavigation: restored })
+    let finishPreparation!: () => void
+    if (delayed) mocks.prepareOfflineQuestion.mockReturnValueOnce(new Promise<void>(resolve => { finishPreparation = resolve }))
     const wrapper = mount(StudentAssessment)
     await flushPromises()
+    if (delayed) {
+      expect(wrapper.get('[data-navigation-retry]').attributes('disabled')).toBeDefined()
+      await wrapper.get('[data-navigation-retry]').trigger('click')
+      expect(mocks.api.saveAndLeave).not.toHaveBeenCalled()
+      finishPreparation()
+      await flushPromises()
+    }
     expect(wrapper.get('[name=answer]').attributes('disabled')).toBeDefined()
     expect(mocks.runtime.record.mock.calls.some(call => call[0] === 'item_rendered')).toBe(false)
     expect(await mocks.beforeRouteLeave!()).toBe(false)
