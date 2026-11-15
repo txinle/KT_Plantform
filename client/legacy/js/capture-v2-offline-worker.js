@@ -205,14 +205,37 @@ self.addEventListener('message', (event) => {
           || bootstrap.assessment_session_id !== event.data.state.session_id
           || bootstrap.assignment_id !== event.data.state.assignment.assignment_id
           || !Number.isInteger(bootstrap.user?.id)) throw new Error('invalid_bootstrap_scope');
-      const authResponse = await fetch(`${self.location.origin}/api/v1/auth/session/`, { credentials: 'same-origin', cache: 'no-store' });
-      const auth = authResponse.ok ? (await authResponse.json()).data : null;
+      const hasProof = typeof event.data.proof === 'string';
+      let authResponse;
+      try {
+        authResponse = hasProof
+          ? await fetch(`${self.location.origin}/api/v1/auth/offline-preparation/verify/`, {
+            method: 'POST', credentials: 'omit', cache: 'no-store',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proof: event.data.proof }),
+          })
+          : await fetch(`${self.location.origin}/api/v1/auth/session/`, { credentials: 'same-origin', cache: 'no-store' });
+      } catch {
+        throw new Error('offline_authentication_unavailable');
+      }
+      if (!authResponse.ok) {
+        if (hasProof && authResponse.status === 401) {
+          const failure = await authResponse.json().catch(() => null);
+          if (failure?.error?.code === 'OFFLINE_PROOF_INVALID') throw new Error('offline_proof_invalid');
+        }
+        const code = authResponse.status === 401 ? 'offline_authentication_required' : 'offline_authentication_unavailable';
+        throw new Error(code);
+      }
+      const auth = (await authResponse.json()).data;
       if (epoch !== identityEpoch) throw new Error('offline_identity_changed');
-      if (auth?.user?.id !== bootstrap.user.id) {
+      const userId = hasProof ? auth?.user_id : auth?.user?.id;
+      if (!Number.isInteger(userId)) throw new Error('offline_authentication_unavailable');
+      if (userId !== bootstrap.user.id) {
         await clearRuntimeCaches();
         throw new Error('invalid_account_scope');
       }
-      const scope = { userId: auth.user.id, sessionId: event.data.state.session_id,
+      if (hasProof && (auth.session_id !== bootstrap.assessment_session_id
+          || auth.assignment_id !== bootstrap.assignment_id)) throw new Error('invalid_question_scope');
+      const scope = { userId, sessionId: event.data.state.session_id,
         buildVersion: String(event.data.buildVersion || 'development') };
       const prior = await identity();
       if (epoch !== identityEpoch) throw new Error('offline_identity_changed');
@@ -239,6 +262,6 @@ self.addEventListener('message', (event) => {
       await metadata.put(META_URL, new Response(JSON.stringify(scope), { headers: { 'Content-Type': 'application/json' } }));
       if (epoch !== identityEpoch) throw new Error('offline_identity_changed');
       event.ports[0]?.postMessage({ ok: true, commonResourcesPrepared: true });
-    } catch (error) { event.ports[0]?.postMessage({ ok: false, error: String(error) }); }
+    } catch (error) { event.ports[0]?.postMessage({ ok: false, error: String(error), code: error.message }); }
   })());
 });

@@ -93,6 +93,32 @@ const workerResolutions = new WeakMap<ServiceWorkerContainer, Promise<ServiceWor
 const preparedResources = new WeakMap<ServiceWorker, { scope: string; urls: Set<string> }>()
 const publicPreparations = new WeakMap<ServiceWorkerContainer, { epoch: number; version: string; promise: Promise<void> }>()
 let preparationEpoch = 0
+
+async function preparationProof(state: StudentRuntimeQuestionEntry, csrfToken: string) {
+  let response: Response
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10000)
+  try {
+    response = await fetch('/api/v1/auth/offline-preparation/', {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+      body: JSON.stringify({ session_id: state.session_id, assignment_id: state.assignment.assignment_id }),
+    })
+  } catch {
+    throw new OfflinePreparationError('网络暂不可用，请恢复连接后重新准备。', 'offline_authentication_unavailable')
+  } finally {
+    clearTimeout(timeout)
+  }
+  if (!response.ok) {
+    if (response.status === 401) throw new OfflinePreparationError('登录已失效，请重新登录后继续。', 'offline_authentication_required')
+    if (response.status === 403) throw new OfflinePreparationError('作答身份校验未通过，请重新登录后进入任务。', 'offline_authentication_required')
+    throw new OfflinePreparationError('作答准备服务暂不可用，请稍后重新准备。', 'offline_authentication_unavailable')
+  }
+  const proof = (await response.json()).data?.proof
+  if (typeof proof !== 'string' || !proof) throw new OfflinePreparationError('准备服务返回无效，请重新准备。', 'offline_authentication_unavailable')
+  return proof
+}
 function currentOfflineWorker() {
   const container = navigator.serviceWorker
   let pending = workerResolutions.get(container)
@@ -166,6 +192,10 @@ export async function prepareOfflineQuestion(state: StudentRuntimeQuestionEntry)
   const pageUrl = new URL(currentQuestionUrl || location.href, location.origin)
   const worker = await currentOfflineWorker()
   const context = getBootstrapContext()
+  const proof = await preparationProof(state, context.csrf_token)
+  if (epoch !== preparationEpoch || getBootstrapContext().user.id !== context.user.id) {
+    throw new OfflinePreparationError('登录身份已变化，请重新进入任务。', 'offline_identity_changed')
+  }
   const scope = JSON.stringify([context.user.id, state.session_id, assessmentBuildVersion])
   const prepared = preparedResources.get(worker)
   const resources = staticResources()
@@ -175,7 +205,7 @@ export async function prepareOfflineQuestion(state: StudentRuntimeQuestionEntry)
     const recoveryState = JSON.parse(JSON.stringify(state)) as StudentRuntimeQuestionEntry
     delete recoveryState.initial_writer_lease
     const result = await sendWorkerMessage(worker, {
-      type: 'prepare-capture-v2', page: pageUrl.href,
+      type: 'prepare-capture-v2', page: pageUrl.href, proof,
       bootstrap: {
         ...context, version: 1, page_path: pageUrl.pathname,
         assessment_session_id: state.session_id, assignment_id: state.assignment.assignment_id,

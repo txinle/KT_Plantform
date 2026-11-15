@@ -4540,6 +4540,84 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/auth/offline-preparation/:
+    post:
+      operationId: auth_offline_preparation_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreparationScope'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PreparationScope'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PreparationScope'
+        required: true
+      security:
+      - SessionAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/PreparationProof'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
+  /api/v1/auth/offline-preparation/verify/:
+    post:
+      operationId: auth_offline_preparation_verify_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreparationProof'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PreparationProof'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PreparationProof'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/VerifiedPreparation'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/auth/password/change/:
     post:
       operationId: auth_password_change_create
@@ -21701,6 +21779,26 @@ components:
           type: string
           format: date-time
           readOnly: true
+    PreparationProof:
+      type: object
+      properties:
+        proof:
+          type: string
+          maxLength: 2048
+      required:
+      - proof
+    PreparationScope:
+      type: object
+      properties:
+        session_id:
+          type: integer
+          minimum: 1
+        assignment_id:
+          type: integer
+          minimum: 1
+      required:
+      - assignment_id
+      - session_id
     ProcessStep:
       type: object
       properties:
@@ -28027,6 +28125,21 @@ components:
       description: |-
         * `question` - question
         * `group` - group
+    VerifiedPreparation:
+      type: object
+      properties:
+        session_id:
+          type: integer
+          minimum: 1
+        assignment_id:
+          type: integer
+          minimum: 1
+        user_id:
+          type: integer
+      required:
+      - assignment_id
+      - session_id
+      - user_id
     VisibilityE8aEnum:
       enum:
       - private

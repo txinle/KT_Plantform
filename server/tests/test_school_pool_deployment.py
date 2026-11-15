@@ -25,6 +25,18 @@ def compose(name):
 
 
 class SchoolPoolDeploymentTests(TestCase):
+    def test_offline_preparation_uses_authentication_pools(self):
+        for filename, expected in [('kt-school.conf', 'auth'),
+                                   ('kt-school-shared-entry.conf.template', 'entry'),
+                                   ('kt-school-capacity.conf.template', 'entry')]:
+            config = (DEPLOY / 'nginx' / filename).read_text(encoding='utf-8')
+            body = config.split('map "$request_method:$uri" $school_pool {', 1)[1].split('}', 1)[0]
+            rows = re.findall(r'~(\^[^\s]+)\s+(\w+);', body)
+            for suffix in ('', 'verify/'):
+                path = 'POST:/api/v1/auth/offline-preparation/' + suffix
+                with self.subTest(filename=filename, path=path):
+                    self.assertEqual(next((pool for pattern, pool in rows if re.search(pattern, path)), 'core'), expected)
+
     def admission_settings(self, environment):
         source = (DEPLOY.parent / 'server/config/settings.py').read_text(encoding='utf-8')
         block = source.split('ASSESSMENT_ADMISSION_ENABLED =', 1)[1].split('ATOMIC_SUBMISSION_ENABLED =', 1)[0]

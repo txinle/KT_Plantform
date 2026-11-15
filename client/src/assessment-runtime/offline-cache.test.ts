@@ -57,6 +57,7 @@ describe('prepareOfflineQuestion', () => {
     expect(postedMessage).not.toHaveProperty('api')
   })
   beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: { proof: 'fresh-proof' } }) }))
     context.userId = 3
     context.buildVersion = 'a'.repeat(20)
     window.history.replaceState({}, '', '/student/sessions/7/questions/11/')
@@ -113,6 +114,25 @@ describe('prepareOfflineQuestion', () => {
       code: 'capture_contract_unavailable',
       message: '离线恢复准备失败：capture page response did not carry its contract marker',
     })
+  })
+
+  it('obtains fresh page-authorized proof for every preparation and never puts it in cached state', async () => {
+    workerResponse = { ok: true }
+    await prepareOfflineQuestion(state)
+    await prepareOfflineQuestion(state)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenCalledWith('/api/v1/auth/offline-preparation/', expect.objectContaining({
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      body: JSON.stringify({ session_id: 7, assignment_id: 11 }),
+    }))
+    expect(postedMessage?.proof).toBe('fresh-proof')
+    expect(postedMessage?.state).not.toHaveProperty('proof')
+  })
+
+  it.each([401, 503])('does not start worker preparation after page authorization fails with %s', async status => {
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status } as Response)
+    await expect(prepareOfflineQuestion(state)).rejects.toMatchObject({ code: status === 401 ? 'offline_authentication_required' : 'offline_authentication_unavailable' })
+    expect(worker.postMessage).not.toHaveBeenCalled()
   })
 
   it('checks for an updated worker once before reusing it across question preparation', async () => {

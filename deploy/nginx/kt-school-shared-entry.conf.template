@@ -8,6 +8,7 @@ map $http_x_forwarded_proto $public_scheme {
 map "$request_method:$uri" $school_pool {
     default core;
     ~^(GET|HEAD):/api/v1/auth/(bootstrap|csrf|session)/$ entry;
+    ~^POST:/api/v1/auth/offline-preparation/(verify/)?$ entry;
     ~^POST:/api/v1/auth/(login|logout|research-consent|password/change|password/reminder-shown)/$ entry;
     ~^POST:/api/v1/student/tasks/[0-9]+/(start|resume|admission/status)/$ entry;
     ~^(GET|HEAD):/api/v1/student/tasks/[0-9]+/recovery/$ assessment;

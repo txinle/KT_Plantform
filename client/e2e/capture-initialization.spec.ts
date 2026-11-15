@@ -150,6 +150,37 @@ async function login(page: Page, username: string, password: string) {
   await acceptResearchConsentIfRequired(page)
 }
 
+test('capture-v2 recovers preparation and verifies identity without worker cookies', async ({ page, context, browserName }, testInfo) => {
+  test.setTimeout(120_000)
+  const fixture: CaptureFixture = django(['seed_e2e_capture_initialization', '--run-key', `proof-${browserName}-${randomUUID().slice(0, 8)}`])
+  await login(page, fixture.student.username, fixture.student.password)
+  let failPreparation = true
+  let verifiedWithoutCookies = false
+  await context.route('**/api/v1/auth/offline-preparation/', async route => {
+    if (failPreparation) await route.fulfill({ status: 503, contentType: 'application/json', body: '{}' })
+    else await route.continue()
+  })
+  await context.route('**/api/v1/auth/offline-preparation/verify/', async route => {
+    const headers = await route.request().allHeaders()
+    expect(headers.cookie).toBeUndefined()
+    verifiedWithoutCookies = true
+    await route.continue()
+  })
+  await page.goto(`/student/courses/${fixture.course.id}/`)
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: fixture.experiment_name, exact: true }) })
+    .getByRole('button', { name: '开始作业', exact: true }).click()
+  await expect(page.locator('[data-init-failure]')).toContainText('暂不可用')
+  await expect(page.locator('[data-next-question]')).toBeDisabled()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.screenshot({ path: testInfo.outputPath('preparation-unavailable-mobile.png'), fullPage: true })
+  failPreparation = false
+  await page.locator('[data-init-retry]').click()
+  await expect(page.locator('main[data-init-state="ready"]')).toBeVisible()
+  await expect(page.locator('[data-next-question]')).toBeEnabled()
+  // Chromium exposes worker-owned requests to routing; WebKit does not.
+  if (browserName === 'chromium') expect(verifiedWithoutCookies).toBe(true)
+})
+
 test('capture-v2 updates a previously installed worker before preparing a router-entered question', async ({ page, browserName }) => {
   test.skip(!!process.env.E2E_BASE_URL, 'Requires the owned local frontend asset server.')
   test.setTimeout(120_000)

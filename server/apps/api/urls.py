@@ -1,5 +1,6 @@
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView
+from .offline_preparation import OfflinePreparationView, VerifyOfflinePreparationView
 
 from .views import (
     BootstrapContextView,
@@ -15,6 +16,8 @@ from .views import (
 
 
 urlpatterns = [
+    path('auth/offline-preparation/', OfflinePreparationView.as_view(), name='api-offline-preparation'),
+    path('auth/offline-preparation/verify/', VerifyOfflinePreparationView.as_view(), name='api-offline-preparation-verify'),
     path('manage/', include('apps.accounts.api.admin_workspace_urls')),
     path('auth/bootstrap/', BootstrapContextView.as_view(), name='api-bootstrap'),
     path(

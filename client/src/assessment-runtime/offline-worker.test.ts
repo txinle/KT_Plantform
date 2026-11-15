@@ -87,6 +87,56 @@ function harness(existingStores?: Map<string, Map<string, Response>>) {
 }
 
 describe('capture-v2 offline worker resource preparation', () => {
+  it('verifies a scoped proof without worker session cookies', async () => {
+    const worker = harness()
+    const original = worker.fetch.getMockImplementation()!
+    worker.fetch.mockImplementation(async request => {
+      const url = String(request)
+      if (url.endsWith('/auth/session/')) return new Response('', { status: 401 })
+      if (url.endsWith('/offline-preparation/verify/')) return Response.json({ data: { user_id: 3, session_id: 7, assignment_id: 11 } })
+      return original(request)
+    })
+    expect(await worker.prepare([immutable], { proof: 'short-lived-proof' })).toMatchObject({ ok: true })
+    expect(worker.fetch.mock.calls.some(([url]) => String(url).endsWith('/auth/session/'))).toBe(false)
+    for (const cache of worker.stores.values()) for (const response of cache.values()) {
+      expect(await response.clone().text()).not.toContain('short-lived-proof')
+    }
+  })
+
+  it.each([401, 503])('preserves existing recovery when authentication returns %s', async status => {
+    const worker = harness()
+    await worker.prepare([immutable])
+    const original = worker.fetch.getMockImplementation()!
+    worker.fetch.mockImplementation(async request => String(request).endsWith('/auth/session/') ? new Response('', { status }) : original(request))
+    expect(await worker.prepare([immutable])).toMatchObject({ ok: false, code: status === 401 ? 'offline_authentication_required' : 'offline_authentication_unavailable' })
+    worker.fetch.mockRejectedValue(new TypeError('offline'))
+    expect(await (await worker.request(page))?.text()).toContain('kt-offline-bootstrap')
+  })
+
+  it('rejects a proof for a different question', async () => {
+    const worker = harness()
+    worker.fetch.mockResolvedValue(Response.json({ data: { user_id: 3, session_id: 7, assignment_id: 12 } }))
+    expect(await worker.prepare([], { proof: 'other-question' })).toMatchObject({ ok: false, error: expect.stringContaining('invalid_question_scope') })
+  })
+
+  it('does not prepare with a proof after logout while verification is pending', async () => {
+    const worker = harness()
+    let release!: (response: Response) => void
+    worker.fetch.mockImplementation(() => new Promise(resolve => { release = resolve }))
+    const preparing = worker.prepare([], { proof: 'pending-proof' })
+    await Promise.resolve()
+    await worker.message({ type: 'clear-capture-v2' })
+    release(Response.json({ data: { user_id: 3, session_id: 7, assignment_id: 11 } }))
+    expect(await preparing).toMatchObject({ ok: false, code: 'offline_identity_changed' })
+    expect(worker.stores.size).toBe(0)
+  })
+
+  it('distinguishes expired preparation proof from an expired login', async () => {
+    const worker = harness()
+    worker.fetch.mockResolvedValue(Response.json({ error: { code: 'OFFLINE_PROOF_INVALID' } }, { status: 401 }))
+    expect(await worker.prepare([], { proof: 'expired-proof' })).toMatchObject({ ok: false, code: 'offline_proof_invalid' })
+  })
+
   it.each(['/student/courses/1/', '/login/', '/student/sessions/7/questions/11/'])('rejects retired per-item recovery from %s', async source => {
     const worker = harness()
     const paper = preparedPaperState()

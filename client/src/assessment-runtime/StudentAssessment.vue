@@ -120,7 +120,7 @@ const navigationOpen = ref(false)
 const responseConflict = ref<Record<string, unknown>>()
 const captureReady = ref(false)
 const initializationState = ref<'loading' | 'preparing' | 'failed' | 'ready'>('loading')
-const initializationError = ref<{ message: string; technicalDetails: string }>()
+const initializationError = ref<{ message: string; technicalDetails: string; loginRequired: boolean }>()
 let countdown: ReturnType<typeof globalThis.setInterval> | undefined
 let recoveryTimer: ReturnType<typeof globalThis.setInterval> | undefined
 let leaseRetryNeeded = false
@@ -1361,8 +1361,16 @@ function preparationErrorDetails(caught: unknown) {
   const code = typeof (caught as { code?: unknown })?.code === 'string'
     ? (caught as { code: string }).code
     : ''
+  const loginRequired = ['offline_authentication_required', 'invalid_account_scope', 'offline_identity_changed'].includes(code)
   return {
-    message: '作答环境准备失败，当前暂不能作答。请重试；持续失败请联系教师。',
+    loginRequired,
+    message: loginRequired
+      ? '登录身份需要重新核验，请重新登录原账号后继续作答。'
+      : code === 'offline_proof_invalid'
+        ? '准备凭据已过期，请点击重新准备。'
+        : code === 'offline_authentication_unavailable'
+          ? '网络或作答准备服务暂不可用，请稍后重新准备。'
+          : '作答环境准备失败，当前暂不能作答。请重试；持续失败请联系教师。',
     technicalDetails: code && !message.includes(code) ? `${code}: ${message}` : message,
   }
 }
@@ -1936,6 +1944,7 @@ onBeforeUnmount(() => {
             <p>{{ initializationError.message }}</p>
             <p data-init-technical-details><strong>技术信息：</strong><code>{{ initializationError.technicalDetails }}</code></p>
             <div class="kt-assessment-actions">
+              <a v-if="initializationError.loginRequired" class="kt-button" data-init-login :href="`/login/?next=${encodeURIComponent(route.fullPath)}`">重新登录</a>
               <button type="button" class="kt-button" data-init-retry @click="retryCaptureInitialization">重新准备</button>
               <a class="kt-button kt-button--secondary" data-init-return href="/student/">返回任务列表</a>
             </div>

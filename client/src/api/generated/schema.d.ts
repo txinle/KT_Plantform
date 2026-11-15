@@ -289,6 +289,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/offline-preparation/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["auth_offline_preparation_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/offline-preparation/verify/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["auth_offline_preparation_verify_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/password/change/": {
         parameters: {
             query?: never;
@@ -4793,6 +4825,13 @@ export interface components {
             /** Format: date-time */
             readonly updated_at?: string;
         };
+        PreparationProof: {
+            proof: string;
+        };
+        PreparationScope: {
+            session_id: number;
+            assignment_id: number;
+        };
         ProcessStep: {
             label: string;
             /** Format: date-time */
@@ -7233,6 +7272,11 @@ export interface components {
          * @enum {string}
          */
         UnitKindEnum: "question" | "group";
+        VerifiedPreparation: {
+            session_id: number;
+            assignment_id: number;
+            user_id: number;
+        };
         /**
          * @description * `private` - private
          *     * `shared` - shared
@@ -9828,6 +9872,66 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    auth_offline_preparation_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreparationScope"];
+                "application/x-www-form-urlencoded": components["schemas"]["PreparationScope"];
+                "multipart/form-data": components["schemas"]["PreparationScope"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PreparationProof"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    auth_offline_preparation_verify_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreparationProof"];
+                "application/x-www-form-urlencoded": components["schemas"]["PreparationProof"];
+                "multipart/form-data": components["schemas"]["PreparationProof"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["VerifiedPreparation"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
             };
         };
     };

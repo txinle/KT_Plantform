@@ -2204,6 +2204,16 @@ describe('StudentAssessment', () => {
     expect(wrapper.find('[aria-labelledby="finish-dialog-title"]').exists()).toBe(false)
   })
 
+  it('offers login recovery when offline preparation loses authentication', async () => {
+    mocks.api.question.mockResolvedValue(captureV2Question())
+    mocks.prepareOfflineQuestion.mockRejectedValueOnce(Object.assign(new Error('authentication failed'), { code: 'offline_authentication_required' }))
+    const wrapper = mount(StudentAssessment)
+    await flushPromises()
+    expect(wrapper.get('[data-init-failure]').text()).toContain('重新登录')
+    expect(wrapper.get('[data-init-login]').attributes('href')).toContain('/login/?next=')
+    expect(wrapper.find('[data-next-question]').attributes('disabled')).toBeDefined()
+  })
+
   it('retries only offline preparation as a single flight without resetting the deadline timer', async () => {
     vi.useFakeTimers()
     let finishRetry!: () => void
