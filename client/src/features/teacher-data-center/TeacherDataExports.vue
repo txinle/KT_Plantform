@@ -2,8 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
+import { ApiError } from '@/api/client'
 import Alert from '@/design-system/components/Alert.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
+import DataPageHeader from './DataPageHeader.vue'
 
 import { getTeacherDataCenterApi, routeQuery, type DataCenterExportCatalog, type DataCenterExportJobMutation } from './api'
 
@@ -63,7 +64,10 @@ async function createExport() {
       schedulePoll()
     }
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '导出任务创建失败，请核对范围后重试。'
+    const details = caught instanceof ApiError
+      ? Object.values(caught.fields).flat().filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+      : []
+    error.value = details.join('；') || (caught instanceof Error ? caught.message : '导出任务创建失败，请核对范围后重试。')
   } finally {
     creating.value = false
   }
@@ -136,40 +140,44 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageHeader title="导出研究数据">
-    <template #kicker>可复核数据包</template>
+  <DataPageHeader title="导出研究数据">
     <p>将当前实验、班级、学生和作答会话范围冻结为一个 ZIP 数据包。</p>
-  </PageHeader>
+  </DataPageHeader>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="!data && !error" role="status">正在加载研究数据导出…</p>
   <template v-else-if="data">
-    <Alert tone="warning"><strong>实名数据确认：</strong>{{ data.identified_data_notice }}</Alert>
-    <p v-if="data.preparation.pending_count" class="kt-warning-text">{{ data.preparation.pending_count }} 名已结束学生的数据正在后台整理，暂不能导出。</p>
+    <Alert v-if="data.preparation.pending_count" tone="warning">{{ data.preparation.pending_count }} 名已结束学生的数据正在后台整理，暂不能导出。</Alert>
 
     <section class="kt-card kt-export-package">
       <div class="kt-section-heading">
         <div>
-          <p class="kt-kicker">唯一标准格式</p>
           <h2>标准实验数据包（ZIP）</h2>
           <p>{{ activePackage?.description }}</p>
         </div>
         <small>目录生成于 {{ formattedTime(data.generated_at) }}</small>
       </div>
-      <section v-for="group in groups" :key="group.key" class="kt-export-file-group" :aria-label="group.title">
-        <div><h3>{{ group.title }}</h3><p>{{ group.note }}</p></div>
-        <ul class="kt-export-file-list">
-          <li v-for="table in group.tables" :key="table.key" data-testid="export-table">
-            <div><strong>{{ table.path }}</strong><span>{{ table.description }}</span></div>
-            <small>{{ table.format.toUpperCase() }} · {{ table.total_items }} 条记录</small>
-          </li>
-        </ul>
-      </section>
+      <details class="kt-data-details" data-export-files>
+        <summary>查看文件明细<span>7 张 CSV · 1 个 JSON</span></summary>
+        <section v-for="group in groups" :key="group.key" class="kt-export-file-group" :aria-label="group.title">
+          <div><h3>{{ group.title }}</h3><p>{{ group.note }}</p></div>
+          <ul class="kt-export-file-list">
+            <li v-for="table in group.tables" :key="table.key" data-testid="export-table">
+              <div><strong>{{ table.path }}</strong><span>{{ table.description }}</span></div>
+              <small>{{ table.format.toUpperCase() }} · {{ table.total_items }} 条记录</small>
+            </li>
+          </ul>
+        </section>
+      </details>
     </section>
 
     <section v-if="activePackage" class="kt-card kt-export-confirm">
-      <h2>确认导出</h2>
-      <p>将按当前选择生成标准实验数据包。表1、3、4、题目固定库和事件字典复用课程资产；表2覆盖当前实验全部已发布班级；表5、6按所选班级范围生成。</p>
-      <p>数据包包含学生姓名和学号，请按研究数据管理要求使用。</p>
+      <div class="kt-export-action-heading"><h2>生成数据包</h2><span>包含学生姓名与学号</span></div>
+      <details class="kt-data-details" data-export-notes>
+        <summary>导出说明</summary>
+        <p>将按当前选择生成标准实验数据包。表1、3、4、题目固定库和事件字典复用课程资产；表2覆盖当前实验全部已发布班级；表5、6按所选班级范围生成。</p>
+        <p>数据包包含学生姓名和学号，请按研究数据管理要求使用。</p>
+        <p>{{ data.identified_data_notice }}</p>
+      </details>
       <p v-if="!canCreate" class="kt-warning-text">请完成范围选择，并等待终态学生数据整理完成。</p>
       <form @submit.prevent="createExport">
         <button class="kt-button kt-button--danger" type="submit" :disabled="creating || !canCreate">{{ creating ? '正在提交…' : '导出实验数据包' }}</button>

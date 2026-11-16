@@ -10,6 +10,7 @@ vi.mock('./api', () => ({
 }))
 
 import TeacherDataExports from './TeacherDataExports.vue'
+import { ApiError } from '@/api/client'
 
 const tables = [
   ['sessions', '会话', '01_课程学生.csv', 'course', 'csv'],
@@ -57,6 +58,9 @@ describe('TeacherDataExports', () => {
     await flushPromises()
 
     expect(wrapper.get('h1').text()).toBe('导出研究数据')
+    expect(wrapper.get<HTMLDetailsElement>('[data-export-files]').element.open).toBe(false)
+    expect(wrapper.get<HTMLDetailsElement>('[data-export-notes]').element.open).toBe(false)
+    expect(wrapper.find('.kt-export-confirm form').exists()).toBe(true)
     expect(wrapper.text()).toContain('标准实验数据包（ZIP）')
     expect(wrapper.findAll('[data-testid="export-table"]')).toHaveLength(8)
     expect(wrapper.text()).toContain('课程基础资料')
@@ -107,6 +111,21 @@ describe('TeacherDataExports', () => {
       package: 'experiment', confirm_identified: true,
       scope: { scope_version: 2, experiment_id: 3, class_mode: 'all' },
     })
+  })
+
+  it('shows the server reason when regrading makes an export stale after loading', async () => {
+    const reason = '63 名已结束学生的数据正在后台整理，请稍后再导出'
+    mocks.api.createExport.mockRejectedValue(new ApiError(400, {
+      error: { code: 'VALIDATION_ERROR', message: '请求数据无效。', fields: { scope: [reason] } },
+    }))
+    const wrapper = mount(TeacherDataExports)
+    await flushPromises()
+    await wrapper.get('.kt-export-confirm form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(reason)
+    expect(wrapper.text()).not.toContain('请求数据无效。')
+    wrapper.unmount()
   })
 
   it('blocks incomplete exports and stops polling after success', async () => {

@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
+import DataPageHeader from '../teacher-data-center/DataPageHeader.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 
 import {
@@ -93,10 +93,10 @@ onMounted(() => load())
 
 <template>
   <section class="kt-teaching-data">
-    <PageHeader title="教学数据">
-      <template #kicker>学生、会话与单题作答</template>
-      <p>从学生汇总进入会话，再进入单题作答；评分仅使用当前有效 GradeRecord。</p>
-    </PageHeader>
+    <DataPageHeader title="教学数据">
+      <p>从学生汇总进入会话，再查看单题作答；评分展示当前有效的批改结果。</p>
+      <p>学生列表包含班级全体学生，没有实验记录的学生仍会显示。</p>
+    </DataPageHeader>
 
     <Alert v-if="error" tone="danger">{{ error }}</Alert>
     <p v-if="!data && !error" role="status">正在加载教学数据…</p>
@@ -110,9 +110,8 @@ onMounted(() => load())
         <section class="kt-section kt-teaching-roster" aria-labelledby="teaching-students-title">
           <div class="kt-section-heading">
             <div>
-              <p class="kt-kicker">班级 roster</p>
               <h2 id="teaching-students-title">学生数据</h2>
-              <p>以班级 roster 为全集，共 {{ data.total_roster_count }} 名学生；没有实验记录的学生仍会显示。</p>
+              <span class="kt-cell-note">共 {{ data.total_roster_count }} 名学生</span>
             </div>
           </div>
           <form class="kt-teaching-search" role="search" @submit.prevent="submitSearch">

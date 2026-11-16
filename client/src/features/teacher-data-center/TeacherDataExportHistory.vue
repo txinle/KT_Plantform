@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import MobileCardList from '@/design-system/components/MobileCardList.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
+import DataPageHeader from './DataPageHeader.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 
@@ -63,10 +63,9 @@ onMounted(() => load())
 </script>
 
 <template>
-  <PageHeader title="导出记录">
-    <template #kicker>实验数据导出历史</template>
+  <DataPageHeader title="导出记录">
     <p>查看当前实验、班级、学生和作答会话范围下的导出记录。文件移除后，导出范围和操作记录仍会保留。</p>
-  </PageHeader>
+  </DataPageHeader>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="!data && !error" role="status">正在加载导出记录…</p>
   <EmptyState v-else-if="data && !data.items.length" title="当前范围尚无导出记录" />

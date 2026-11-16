@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   childLoad: vi.fn(), scope: vi.fn(), updateScope: vi.fn(), get: vi.fn(), replace: vi.fn(),
-  applyRouteQuery: vi.fn(),
+  applyRouteQuery: vi.fn(), applyRoutePath: vi.fn(),
   route: {
     params: { courseId: '7' },
     query: { version_mode: 'single', status: 'completed', search: '张同学', session_ref: 'S-001', table: 'sessions', page: '2', package: 'experiment' } as Record<string, string | number | undefined>,
@@ -15,6 +15,7 @@ vi.mock('vue-router', async () => {
   const { reactive, watch } = await import('vue')
   const route = reactive(mocks.route)
   mocks.applyRouteQuery.mockImplementation((query: Record<string, string | number | undefined>) => { route.query = query })
+  mocks.applyRoutePath.mockImplementation((path: string) => { route.path = path })
   return {
     useRoute: () => route,
     useRouter: () => ({ replace: async (location: { query: Record<string, string | number | undefined> }) => {
@@ -70,9 +71,10 @@ describe('TeacherDataCenterLayout', () => {
     expect(wrapper.get('nav[aria-label="数据中心导航"]').classes()).toContain('kt-sidebar-secondary-nav')
     expect(wrapper.findAll('nav[aria-label="课程导航"] .kt-workspace-navigation-icon')).toHaveLength(7)
     expect(wrapper.get('[aria-label="当前数据范围"]').text()).toContain('课程：KT101 研究方法')
-    expect(wrapper.get('[aria-label="当前数据范围"]').text()).toContain('班级：2026 实验班')
-    expect(wrapper.get('[aria-label="当前数据范围"]').text()).toContain('已选择实验：数据实验、追踪实验（2 个实验）')
-    expect(wrapper.get('.kt-scope-bar summary').text()).toBe('更改范围')
+    const picker = wrapper.get<HTMLDetailsElement>('[data-experiment-picker]')
+    expect(picker.element.open).toBe(false)
+    expect(picker.get('summary').text()).toContain('已选 2 个实验')
+    expect(wrapper.find('summary[aria-label="更改范围"]').exists()).toBe(false)
     const form = wrapper.get('.kt-scope-bar form')
     const experimentChoices = form.findAll('input[name="experiment_ids"]')
     expect(experimentChoices).toHaveLength(2)
@@ -84,7 +86,7 @@ describe('TeacherDataCenterLayout', () => {
     await flushPromises()
     expect(mocks.updateScope).toHaveBeenCalledWith(7, { experiment_ids: [3, 5], class_id: 4 })
     expect(mocks.replace).toHaveBeenCalledWith({ query: { experiment_ids: '3,5', class_id: 4, view: undefined } })
-    expect(wrapper.get('[aria-label="当前数据范围"]').text()).toContain('已选择实验：数据实验、追踪实验（2 个实验）')
+    expect(picker.get('summary').text()).toContain('已选 2 个实验')
     expect(wrapper.get('.kt-data-page').attributes('data-scope-revision')).toBe('1')
     expect(mocks.childLoad).toHaveBeenCalledTimes(2)
     const navigationQuery = JSON.parse(wrapper.get('a[href="/teacher/courses/7/data/advanced/"]').attributes('data-query') || '{}')
@@ -215,7 +217,8 @@ describe('TeacherDataCenterLayout', () => {
     const wrapper = mount(TeacherDataCenterLayout)
     await flushPromises()
 
-    expect(wrapper.findAll('input[name="experiment_id"]')).toHaveLength(2)
+    expect(wrapper.findAll('input[name="experiment_id"]')).toHaveLength(0)
+    expect(wrapper.get('select[name="experiment_id"]').findAll('option')).toHaveLength(3)
     expect(wrapper.find('input[name="experiment_ids"]').exists()).toBe(false)
     const classRange = wrapper.get('select[name="export_class_range"]')
     expect((classRange.element as HTMLSelectElement).value).toBe('all')
@@ -227,6 +230,27 @@ describe('TeacherDataCenterLayout', () => {
     expect(mocks.replace).toHaveBeenCalledWith({
       query: { scope_version: '2', experiment_id: 3, class_mode: 'all' },
     })
+  })
+
+  it('fills the export dropdowns when entering exports from another data page', async () => {
+    mocks.get.mockResolvedValue({ id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' })
+    mocks.scope.mockResolvedValue({
+      course: { id: 7, name: '研究方法', code: 'KT101', term: '2026 秋', status: 'active' },
+      current: { experiment_id: 3, experiment_ids: [3], class_id: 4, is_complete: true, display: '数据实验 · 实验班' },
+      experiments: [{ id: 3, name: '数据实验', versions: [] }],
+      classes: [{ id: 4, name: '实验班', academic_year: '2026' }],
+      scope_update_url: '/api/v1/teacher/courses/7/data/scope/',
+    })
+    const wrapper = mount(TeacherDataCenterLayout)
+    await flushPromises()
+
+    mocks.applyRouteQuery({ experiment_ids: '3', class_id: '4' })
+    mocks.applyRoutePath('/teacher/courses/7/data/exports/')
+    await flushPromises()
+
+    expect((wrapper.get('select[name="experiment_id"]').element as HTMLSelectElement).value).toBe('3')
+    expect((wrapper.get('select[name="export_class_range"]').element as HTMLSelectElement).value).toBe('4')
+    expect(mocks.updateScope).not.toHaveBeenCalled()
   })
 
   it('uses the same top export-v2 selector on export history', async () => {
@@ -244,7 +268,7 @@ describe('TeacherDataCenterLayout', () => {
     const wrapper = mount(TeacherDataCenterLayout)
     await flushPromises()
 
-    expect(wrapper.find('input[name="experiment_id"]').exists()).toBe(true)
+    expect(wrapper.find('select[name="experiment_id"]').exists()).toBe(true)
     expect((wrapper.get('select[name="export_class_range"]').element as HTMLSelectElement).value).toBe('4')
     expect(wrapper.find('input[name="experiment_ids"]').exists()).toBe(false)
   })

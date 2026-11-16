@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 
 import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
+import DataPageHeader from './DataPageHeader.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 
 import { getTeacherDataCenterApi, routeQuery, type DataCenterOverview } from './api'
@@ -46,7 +46,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageHeader title="数据中心"><template #kicker>教学与研究数据</template><p>先确认数据完整、可用且可追溯，再进入分析或导出。</p><template v-if="data" #actions><a class="kt-button kt-button--secondary" :href="data.actions.governance_url">数据治理</a></template></PageHeader>
+  <DataPageHeader title="数据中心"><p>先确认数据完整、可用且可追溯，再进入分析或导出。</p><template v-if="data" #actions><a class="kt-button kt-button--secondary" :href="data.actions.governance_url">数据治理</a></template></DataPageHeader>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="!data && !error" role="status">正在加载数据概览…</p>
   <template v-else-if="data">

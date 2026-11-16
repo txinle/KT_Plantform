@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import MobileCardList from '@/design-system/components/MobileCardList.vue'
-import PageHeader from '@/design-system/components/PageHeader.vue'
+import DataPageHeader from './DataPageHeader.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 
@@ -49,10 +49,9 @@ onMounted(() => load())
 </script>
 
 <template>
-  <PageHeader title="数据质量">
-    <template #kicker>研究可用性</template>
+  <DataPageHeader title="数据质量">
     <p>按学生、作答会话和题目说明具体问题，并明确该问题对研究分析的影响。</p>
-  </PageHeader>
+  </DataPageHeader>
   <Alert v-if="error" tone="danger">{{ error }}</Alert>
   <p v-if="!data && !error" role="status">正在加载数据质量报告…</p>
   <template v-else-if="data">

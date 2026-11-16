@@ -9,6 +9,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 
 import ResearchDataIcon from './ResearchDataIcon.vue'
+import DataPageHeader from './DataPageHeader.vue'
 import ResearchBehaviorCompactTable from './ResearchBehaviorCompactTable.vue'
 import ResearchBehaviorTable from './ResearchBehaviorTable.vue'
 import ResearchCards from './ResearchCards.vue'
@@ -504,13 +505,17 @@ onBeforeUnmount(() => {
   <p v-if="loading && !data" class="kt-research-loading" role="status">正在加载研究数据…</p>
   <p v-else-if="loading" class="kt-research-loading" role="status" aria-busy="true">正在刷新研究数据…</p>
   <template v-else-if="data">
-    <button type="button" class="kt-button" data-testid="refresh-research-data" @click="checkStatus(true)">刷新结果</button>
-    <p v-if="data.preparation" data-testid="preparation-counts" role="status">
-      已结束会话 {{ data.preparation.total_count }} · 最新且材料完整 {{ data.preparation.latest_complete_count }} ·
-      材料不完整或待核验 {{ data.preparation.input_incomplete_count }}（完整性未核验 {{ data.preparation.input_unverified_count }}）·
-      首次整理 {{ data.preparation.pending_count }} · 更新中 {{ data.preparation.updating_count }} ·
-      整理失败 {{ data.preparation.failed_count }}。以上状态可能重叠；评分状态另行展示。
-    </p>
+    <button v-if="view !== 'overview'" type="button" class="kt-button" data-testid="refresh-research-data" @click="checkStatus(true)">刷新结果</button>
+    <details v-if="data.preparation" class="kt-data-details kt-data-preparation-details">
+      <summary>数据整理详情</summary>
+      <p data-testid="preparation-counts" role="status">
+        已结束会话 {{ data.preparation.total_count }} · 最新且材料完整 {{ data.preparation.latest_complete_count }} ·
+        材料不完整或待核验 {{ data.preparation.input_incomplete_count }}（完整性未核验 {{ data.preparation.input_unverified_count }}）·
+        首次整理 {{ data.preparation.pending_count }} · 更新中 {{ data.preparation.updating_count }} ·
+        整理失败 {{ data.preparation.failed_count }}。以上状态可能重叠；评分状态另行展示。
+      </p>
+      <p v-if="data.preparation.status_checked_at" data-testid="preparation-sampled-at">截至 {{ formatTime(data.preparation.status_checked_at) }} 的状态快照。</p>
+    </details>
     <Alert
       v-if="data.preparation && data.preparation.state !== 'ready'"
       :tone="data.preparation.state === 'failed' ? 'danger' : data.preparation.state === 'updating' ? 'info' : 'warning'"
@@ -518,18 +523,14 @@ onBeforeUnmount(() => {
     >
       <strong>研究数据状态：</strong>{{ data.preparation.message }}
     </Alert>
-    <p v-if="data.preparation?.status_checked_at" data-testid="preparation-sampled-at">截至 {{ formatTime(data.preparation.status_checked_at) }} 的状态快照。</p>
-    <header v-if="view === 'overview'" class="kt-research-heading">
-      <div>
-        <p class="kt-research-kicker">实验数据</p>
-        <h1>研究数据预览</h1>
-        <p>按实验、班级、学生和作答会话查看可直接用于研究的六张数据表。</p>
-      </div>
+    <DataPageHeader v-if="view === 'overview'" title="研究数据预览">
+      <p>按实验、班级、学生和作答会话查看可直接用于研究的六张数据表。</p>
       <aside v-if="selectedStudent" class="kt-step-note">
         <ResearchDataIcon name="info" />
         <div><strong>步骤 1/5：筛选单一学生</strong><span>通过选择学生，查看该学生的研究数据预览。</span></div>
       </aside>
-    </header>
+      <template #actions><button type="button" class="kt-button kt-button--secondary" data-testid="refresh-research-data" @click="checkStatus(true)">刷新结果</button></template>
+    </DataPageHeader>
 
     <EmptyState v-if="!data.scope.is_complete" title="请先选择实验和班级">
       <p>研究数据预览需要明确的实验和班级范围。</p>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, provide, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import { createApiClient } from '@/api/client'
@@ -21,11 +21,6 @@ const scope = ref<DataCenterScope>()
 const isRouteRefreshPage = computed(() => route.path.endsWith('/advanced/') || route.path === dataPath())
 const isAdvancedDetail = computed(() => route.path.endsWith('/advanced/') && route.query.view && route.query.view !== 'overview')
 const isExportScopePage = computed(() => /\/data\/(?:export|exports|exports\/history)\/$/.test(route.path))
-const scopeClass = computed(() => scope.value?.classes.find(item => item.id === scope.value?.current.class_id))
-const scopeExperiments = computed(() => {
-  const ids = new Set(scope.value?.current.experiment_ids || [])
-  return scope.value?.experiments.filter(item => ids.has(item.id)) || []
-})
 function dataPath(suffix = '') {
   return `/teacher/courses/${courseId}/data/${suffix}`
 }
@@ -84,14 +79,21 @@ const selectedExperiments = ref<number[]>([])
 const selectedClass = ref<number | ''>('')
 const selectedExportExperiment = ref<number | null>(null)
 const selectedExportClassRange = ref<number | 'all' | ''>('')
+const experimentPicker = ref<HTMLDetailsElement>()
+const selectedExperimentLabel = computed(() => {
+  if (!selectedExperiments.value.length) return '选择实验'
+  if (selectedExperiments.value.length > 1) return `已选 ${selectedExperiments.value.length} 个实验`
+  return scope.value?.experiments.find(item => item.id === selectedExperiments.value[0])?.name || '选择实验'
+})
+function closeExperimentPicker() {
+  if (experimentPicker.value) experimentPicker.value.open = false
+}
+function onOutsidePicker(event: PointerEvent) {
+  if (event.target instanceof Node && !experimentPicker.value?.contains(event.target)) closeExperimentPicker()
+}
 const exportScopeComplete = computed(() => Boolean(
   selectedExportExperiment.value && selectedExportClassRange.value !== '',
 ))
-const exportScopeClassLabel = computed(() => {
-  if (selectedExportClassRange.value === 'all') return '全部已发布班级'
-  const selected = scope.value?.classes.find(item => item.id === selectedExportClassRange.value)
-  return selected ? `${selected.academic_year} ${selected.name}` : '未选择'
-})
 
 function applyScopeSelection(value: DataCenterScope) {
   selectedExperiments.value = value.current.experiment_ids?.length
@@ -106,7 +108,12 @@ function applyScopeSelection(value: DataCenterScope) {
   }
 }
 
+watch(isExportScopePage, exportPage => {
+  if (exportPage && scope.value) applyScopeSelection(scope.value)
+})
+
 async function saveScope() {
+  closeExperimentPicker()
   contextError.value = ''
   if (isExportScopePage.value) {
     if (!exportScopeComplete.value) {
@@ -150,6 +157,7 @@ async function saveScope() {
 }
 
 onMounted(async () => {
+  document.addEventListener('pointerdown', onOutsidePicker)
   try {
     const [courseContext, scopeContext] = await Promise.all([
       createApiClient({ getCsrfToken: () => bootstrap.csrf_token })
@@ -166,6 +174,7 @@ onMounted(async () => {
     contextError.value = caught instanceof Error ? caught.message : '课程信息加载失败，请刷新重试。'
   }
 })
+onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutsidePicker))
 </script>
 
 <template>
@@ -198,19 +207,28 @@ onMounted(async () => {
       </nav>
     </SidebarSection>
     <section v-if="scope && !isAdvancedDetail" class="kt-card kt-scope-bar" aria-label="当前数据范围">
-      <div class="kt-scope-summary"><span>研究数据范围</span><strong>课程：{{ course?.code }} {{ course?.name }}</strong><small>班级：{{ isExportScopePage ? exportScopeClassLabel : (scopeClass ? `${scopeClass.academic_year} ${scopeClass.name}` : '未选择') }}</small><small v-if="isExportScopePage">已选择实验：{{ scope.experiments.find(item => item.id === selectedExportExperiment)?.name || '未选择' }}（{{ selectedExportExperiment ? 1 : 0 }} 个实验）</small><small v-else>已选择实验：{{ scopeExperiments.length ? scopeExperiments.map(item => item.name).join('、') : '未选择' }}（{{ scopeExperiments.length }} 个实验）</small></div>
-      <details :open="isExportScopePage ? !exportScopeComplete : !scope.current.is_complete">
-        <summary>更改范围</summary><form @submit.prevent="saveScope">
-          <template v-if="isExportScopePage">
-            <fieldset class="kt-scope-experiments"><legend>实验 <span data-selected-experiment-count>已选择 {{ selectedExportExperiment ? 1 : 0 }} 个</span></legend><div class="kt-scope-experiment-options"><label v-for="experiment in scope.experiments" :key="experiment.id" class="kt-scope-experiment-choice" :class="{ 'is-selected': selectedExportExperiment === experiment.id }"><input v-model="selectedExportExperiment" name="experiment_id" type="radio" :value="experiment.id" @change="selectedExportClassRange = 'all'"><span class="kt-scope-checkbox" aria-hidden="true">✓</span><span>{{ experiment.name }}</span></label></div><small>标准数据包一次导出一个实验</small></fieldset>
-            <label>班级范围<select v-model="selectedExportClassRange" name="export_class_range"><option value="">选择班级范围</option><option value="all">全部已发布班级</option><option v-for="item in scope.classes" :key="item.id" :value="item.id">{{ item.academic_year }} {{ item.name }}</option></select></label>
-          </template>
-          <template v-else>
-            <fieldset class="kt-scope-experiments"><legend>实验 <span data-selected-experiment-count>已选择 {{ selectedExperiments.length }} 个</span></legend><div class="kt-scope-experiment-options"><label v-for="experiment in scope.experiments" :key="experiment.id" class="kt-scope-experiment-choice" :class="{ 'is-selected': selectedExperiments.includes(experiment.id) }"><input v-model="selectedExperiments" name="experiment_ids" type="checkbox" :value="experiment.id"><span class="kt-scope-checkbox" aria-hidden="true">✓</span><span>{{ experiment.name }}</span></label></div><small>可选择多个实验</small></fieldset><label>班级<select v-model="selectedClass" name="class_id"><option value="">选择班级</option><option v-for="item in scope.classes" :key="item.id" :value="item.id">{{ item.academic_year }} {{ item.name }}</option></select></label>
-          </template>
-          <button class="kt-button" type="submit" :disabled="scopeSaving">{{ scopeSaving ? '正在保存…' : '应用' }}</button>
-        </form>
-      </details>
+      <div class="kt-scope-summary"><span>当前数据范围</span><strong>课程：{{ course?.code }} {{ course?.name }}</strong></div>
+      <form class="kt-scope-controls" @submit.prevent="saveScope">
+        <template v-if="isExportScopePage">
+          <label>实验<select v-model="selectedExportExperiment" name="experiment_id" @change="selectedExportClassRange = 'all'"><option :value="null" disabled>选择实验</option><option v-for="experiment in scope.experiments" :key="experiment.id" :value="experiment.id">{{ experiment.name }}</option></select></label>
+          <label>班级范围<select v-model="selectedExportClassRange" name="export_class_range"><option value="">选择班级范围</option><option value="all">全部已发布班级</option><option v-for="item in scope.classes" :key="item.id" :value="item.id">{{ item.academic_year }} {{ item.name }}</option></select></label>
+        </template>
+        <template v-else>
+          <div class="kt-scope-experiment-select">
+            <span id="scope-experiment-label">实验</span>
+            <details ref="experimentPicker" class="kt-scope-picker" data-experiment-picker @keydown.esc.prevent="closeExperimentPicker">
+              <summary aria-labelledby="scope-experiment-label"><span>{{ selectedExperimentLabel }}</span><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true"><path d="m5 7.5 5 5 5-5" /></svg></summary>
+              <fieldset class="kt-scope-experiments kt-scope-picker-panel">
+                <legend class="kt-sr-only">选择实验，可多选</legend>
+                <div class="kt-scope-experiment-options"><label v-for="experiment in scope.experiments" :key="experiment.id" class="kt-scope-experiment-choice" :class="{ 'is-selected': selectedExperiments.includes(experiment.id) }"><input v-model="selectedExperiments" name="experiment_ids" type="checkbox" :value="experiment.id"><span class="kt-scope-checkbox" aria-hidden="true">✓</span><span>{{ experiment.name }}</span></label></div>
+                <div class="kt-scope-picker-footer"><small data-selected-experiment-count>已选择 {{ selectedExperiments.length }} 个</small><button type="button" class="kt-text-button" @click="closeExperimentPicker">完成选择</button></div>
+              </fieldset>
+            </details>
+          </div>
+          <label>班级<select v-model="selectedClass" name="class_id"><option value="">选择班级</option><option v-for="item in scope.classes" :key="item.id" :value="item.id">{{ item.academic_year }} {{ item.name }}</option></select></label>
+        </template>
+        <button class="kt-button" type="submit" :disabled="scopeSaving">{{ scopeSaving ? '正在保存…' : '应用' }}</button>
+      </form>
     </section>
     <p v-if="contextError" class="kt-alert kt-alert--danger" role="alert">{{ contextError }}</p>
     <div v-else-if="scope || !isExportScopePage" class="kt-data-page" :data-scope-revision="scopeRevision"><RouterView :key="isRouteRefreshPage ? undefined : scopeRevision" /></div>
