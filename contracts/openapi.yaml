@@ -19509,8 +19509,34 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ExperimentActivitySchedule'
+        lifecycle_status:
+          type: string
+        lifecycle_label:
+          type: string
+        participant_count:
+          type: integer
+          minimum: 0
+        completed_count:
+          type: integer
+          minimum: 0
+        in_progress_count:
+          type: integer
+          minimum: 0
+        key_time_label:
+          type: string
+        key_time:
+          type: string
+          format: date-time
+          nullable: true
       required:
+      - completed_count
       - grading_url
+      - in_progress_count
+      - key_time
+      - key_time_label
+      - lifecycle_label
+      - lifecycle_status
+      - participant_count
       - pending_grading_count
       - schedules
     ExperimentActivitySchedule:
@@ -26005,6 +26031,12 @@ components:
           type: string
         business_status:
           type: string
+        lifecycle_status:
+          type: string
+        lifecycle_label:
+          type: string
+        personal_status_label:
+          type: string
         opens_at:
           type: string
           format: date-time
@@ -26035,7 +26067,10 @@ components:
       - experiment_id
       - experiment_name
       - feedback_mode
+      - lifecycle_label
+      - lifecycle_status
       - opens_at
+      - personal_status_label
       - primary_action
       - progress
       - task_id

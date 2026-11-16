@@ -13,6 +13,7 @@ import { studentTaskContext } from './task-context'
 import Icon from '@/design-system/Icon.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 import ModalDialog from '@/design-system/components/ModalDialog.vue'
+import { experimentCardName as cardName } from '@/design-system/experiment-card-name'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,12 +27,12 @@ const taskToStart = ref<StudentTask>()
 const search = ref('')
 const status = ref('all')
 const visibleTasks = computed(() => (response.value?.items || []).filter(task =>
-  (status.value === 'all' || task.business_status === status.value)
+  (status.value === 'all' || task.lifecycle_status === status.value)
   && task.experiment_name.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()),
 ))
 function statusTone(value: string) {
-  if (value === 'open' || value === 'completed') return 'success' as const
-  if (value === 'scheduled') return 'warning' as const
+  if (value === 'started') return 'success' as const
+  if (value === 'not_started') return 'warning' as const
   return 'neutral' as const
 }
 function displayDate(value: string) {
@@ -40,10 +41,6 @@ function displayDate(value: string) {
 
 function actionLabel(action: string | null) {
   return { start: '开始作业', resume: '继续作答', view_result: '查看作答详情' }[action || ''] || '查看作业'
-}
-
-function statusLabel(status: string) {
-  return { scheduled: '未开始', open: '进行中', completed: '已完成', closed: '已结束', cancelled: '已取消' }[status] || status
 }
 
 function requestAction(task: StudentTask) {
@@ -105,7 +102,7 @@ onMounted(() => {
     <div class="kt-student-task-toolbar">
       <div class="kt-student-task-filters">
         <input v-model="search" type="search" aria-label="搜索作业名称" placeholder="搜索作业名称">
-        <select v-model="status" aria-label="按作业状态筛选"><option value="all">全部状态</option><option value="scheduled">未开始</option><option value="open">进行中</option><option value="completed">已完成</option><option value="closed">已结束</option><option value="cancelled">已取消</option></select>
+        <select v-model="status" aria-label="按作业状态筛选"><option value="all">全部状态</option><option value="not_started">未开始</option><option value="started">已开始</option><option value="ended">已结束</option></select>
       </div>
       <button class="kt-button kt-button--secondary" type="button" data-refresh-tasks :disabled="loading" @click="reload">刷新</button>
     </div>
@@ -114,11 +111,15 @@ onMounted(() => {
     <div v-else-if="visibleTasks.length" class="kt-student-task-list">
       <article v-for="task in visibleTasks" :key="task.task_id" class="kt-card kt-student-task-row" :aria-label="task.experiment_name">
         <div class="kt-student-task-card-head">
-          <h2 :title="task.experiment_name">{{ task.experiment_name }}</h2>
-          <StatusBadge :tone="statusTone(task.business_status)" :label="statusLabel(task.business_status)" />
+          <div class="kt-student-task-card-heading"><h2 :title="task.experiment_name" :aria-label="task.experiment_name">{{ cardName(task.experiment_name).title }}</h2><p v-if="cardName(task.experiment_name).subtitle" class="kt-student-task-card-subtitle"><span :title="task.experiment_name">{{ cardName(task.experiment_name).subtitle }}</span></p></div>
+          <StatusBadge data-task-lifecycle :tone="statusTone(task.lifecycle_status)" :label="task.lifecycle_label" />
         </div>
         <div class="kt-student-task-card-details">
           <p class="kt-student-task-card-class"><Icon name="classes" :size="17" />{{ task.class_name }}</p>
+          <p data-personal-progress>我的进度：{{ task.personal_status_label }}</p>
+          <p v-if="task.business_status === 'cancelled'">任务已取消</p>
+          <p v-else-if="task.business_status === 'invalidated'">任务已作废</p>
+          <p v-else-if="task.business_status === 'manual_closed'">教师已结束任务</p>
           <p v-if="task.opens_at">开始：<time :datetime="task.opens_at">{{ displayDate(task.opens_at) }}</time></p>
           <p v-if="task.closes_at">截止：<time :datetime="task.closes_at">{{ displayDate(task.closes_at) }}</time></p>
           <p v-else>未设置截止时间</p>

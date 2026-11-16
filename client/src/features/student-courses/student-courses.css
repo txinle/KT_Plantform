@@ -117,19 +117,22 @@
 .kt-student-task-filters input,
 .kt-student-task-filters select { height: 44px; padding: 0 12px; border: 1px solid #dce4ee; border-radius: 7px; background: #fff; color: inherit; font: inherit; font-size: 14px; }
 .kt-student-task-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
-.kt-student-task-row { display: flex; flex-direction: column; min-width: 0; min-height: 200px; padding: 17px 19px; border: 1px solid #e1e7ef; border-radius: 10px; background: #fff; box-shadow: none; }
+.kt-student-task-row { display: grid; grid-template-rows: subgrid; grid-row: span 3; row-gap: 10px; min-width: 0; padding: 16px 18px; border: 1px solid #e1e7ef; border-radius: 10px; background: #fff; box-shadow: none; }
 .kt-student-task-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.kt-student-task-card-head h2 { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; margin: 0; color: #273d58; font-size: 16px; font-weight: 600; line-height: 1.65; }
-.kt-student-task-card-head .kt-status { flex: none; margin-top: 2px; min-height: 0; padding: 4px 7px; border-radius: 4px; font-size: 11px; line-height: 1.5; white-space: nowrap; }
-.kt-student-task-row p { margin: 0; color: #62758d; font-size: 13px; }
-.kt-student-task-card-details { display: grid; gap: 5px; margin: 14px 0 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.kt-student-task-card-heading { flex: 1; min-width: 0; }
+.kt-student-task-card-head h2 { min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; margin: 0; color: #273d58; font-size: 17px; font-weight: 600; line-height: 24px; }
+.kt-student-task-card-head .kt-status { flex: none; margin-top: 2px; min-height: 0; padding: 4px 7px; border-radius: 4px; font-size: 12px; line-height: 1.5; white-space: nowrap; }
+.kt-student-task-row p { margin: 0; color: #62758d; font-size: 14px; }
+.kt-student-task-row .kt-student-task-card-subtitle { margin: 4px 0 0; font-size: 13px; line-height: 21px; }
+.kt-student-task-card-subtitle > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kt-student-task-card-details { display: grid; gap: 5px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .kt-student-task-card-class { display: flex; align-items: center; gap: 7px; }
 .kt-student-task-card-class .kt-icon { flex: none; }
-.kt-student-task-card-foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 16px; }
-.kt-student-task-card-foot strong { font-weight: 500; color: #38516e; font-variant-numeric: tabular-nums; }
+.kt-student-task-card-foot { display: flex; align-items: center; justify-content: space-between; align-self: end; flex-wrap: wrap; gap: 8px; }
+.kt-student-task-card-foot strong { font-size: 15px; font-weight: 600; color: #38516e; font-variant-numeric: tabular-nums; }
 .kt-student-task-card-foot .kt-button { min-height: 44px; padding: 8px 12px; font-size: 14px; }
-@media (max-width: 1450px) { .kt-student-task-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 1150px) { .kt-student-task-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1750px) { .kt-student-task-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1350px) { .kt-student-task-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .kt-learning-summary-grid {
   display: grid;

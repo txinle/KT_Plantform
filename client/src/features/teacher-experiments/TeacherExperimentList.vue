@@ -12,6 +12,7 @@ import ModalDialog from '@/design-system/components/ModalDialog.vue'
 import Icon from '@/design-system/Icon.vue'
 import Paginator from '@/design-system/components/Paginator.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
+import { experimentCardName as cardName } from '@/design-system/experiment-card-name'
 import DeletionDialog from '@/features/teacher-deletion/DeletionDialog.vue'
 import type { DeletionTarget } from '@/features/teacher-deletion/api'
 
@@ -94,9 +95,15 @@ async function refreshExpanded() {
 }
 
 function statusTone(status: string) {
-  if (status === 'draft') return 'warning' as const
-  if (status === 'archived') return 'neutral' as const
-  return 'success' as const
+  if (status === 'not_started') return 'warning' as const
+  if (status === 'started') return 'success' as const
+  return 'neutral' as const
+}
+
+function cardTime(value: string) {
+  return new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  })
 }
 
 let listRequest = 0
@@ -268,7 +275,7 @@ onMounted(() => load())
             <p class="kt-experiment-search-count">找到 {{ searchResults.page.total_items }} 个实验</p>
             <ul id="experiment-search-results" role="listbox" aria-label="匹配的实验">
               <li v-for="(experiment, index) in searchResults.items" :key="experiment.id" role="none">
-                <RouterLink :id="`experiment-search-result-${index}`" :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)" role="option" :aria-selected="activeSearchIndex === index" @click="searchOpen = false"><span>{{ experiment.name }}</span><StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" /></RouterLink>
+                <RouterLink :id="`experiment-search-result-${index}`" :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)" role="option" :aria-selected="activeSearchIndex === index" @click="searchOpen = false"><span>{{ experiment.name }}</span><StatusBadge :tone="statusTone(experiment.activity?.lifecycle_status || '')" :label="experiment.activity?.lifecycle_label || '状态暂不可用'" /></RouterLink>
               </li>
             </ul>
             <Paginator v-if="searchResults.page.total_pages > 1" :page="searchResults.page.number" :total-pages="searchResults.page.total_pages" @navigate="loadSearch" />
@@ -291,9 +298,22 @@ onMounted(() => load())
     <div class="kt-experiment-card-grid">
       <article v-for="experiment in collection.items" :key="experiment.id" class="kt-experiment-card" :aria-label="experiment.name">
         <div class="kt-experiment-card-head">
-          <h2><RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)" :title="experiment.name">{{ experiment.name }}</RouterLink></h2>
-          <StatusBadge :tone="statusTone(experiment.status)" :label="experiment.status_label" />
+          <div class="kt-experiment-card-heading">
+            <h2><RouterLink :to="pageUrl(`/teacher/courses/${courseId}/experiments/${experiment.id}/`)" :title="experiment.name" :aria-label="experiment.name">{{ cardName(experiment.name).title }}</RouterLink></h2>
+            <p v-if="cardName(experiment.name).subtitle" class="kt-experiment-card-subtitle"><span data-experiment-subtitle :title="experiment.name">{{ cardName(experiment.name).subtitle }}</span></p>
+          </div>
+          <StatusBadge data-experiment-lifecycle :tone="statusTone(experiment.activity?.lifecycle_status || '')" :label="experiment.activity?.lifecycle_label || '状态暂不可用'" />
         </div>
+        <dl class="kt-experiment-card-summary" data-experiment-summary>
+          <div v-if="experiment.activity?.lifecycle_status === 'draft'" class="kt-experiment-card-draft"><dt>尚未发布到班级</dt><dd>发布后显示参与进度与批改待办</dd></div>
+          <template v-else-if="experiment.activity?.lifecycle_status">
+            <div><dt>已完成</dt><dd>{{ experiment.activity.completed_count }} / {{ experiment.activity.participant_count }} 人</dd></div>
+            <div><dt>作答中</dt><dd>{{ experiment.activity.in_progress_count }} 人</dd></div>
+            <div><dt>待批改</dt><dd><a v-if="experiment.activity.grading_url" :href="pageUrl(experiment.activity.grading_url)" data-card-grading :class="{ 'has-pending': experiment.activity.pending_grading_count > 0 }">{{ experiment.activity.pending_grading_count }} 条</a><span v-else>{{ experiment.activity.pending_grading_count }} 条</span></dd></div>
+            <div class="kt-experiment-card-time"><dt>{{ experiment.activity.key_time_label }}</dt><dd><time v-if="experiment.activity.key_time" :datetime="experiment.activity.key_time" :title="new Date(experiment.activity.key_time).toLocaleString('zh-CN')">{{ cardTime(experiment.activity.key_time) }}</time><span v-else>未设置</span></dd></div>
+          </template>
+          <div v-else class="kt-experiment-card-draft"><dt>摘要暂不可用</dt></div>
+        </dl>
         <div class="kt-experiment-card-foot">
           <button v-if="experiment.activity?.schedules.length" type="button" class="kt-experiment-card-classes" :aria-label="`${experiment.name}：查看 ${experiment.activity.schedules.length} 个班级`" :data-class-schedules="experiment.id" @click="toggleSchedules(experiment)"><Icon name="classes" :size="17" />{{ experiment.activity.schedules.length }} 个班级</button>
           <span v-else class="kt-experiment-card-classes kt-muted"><Icon name="classes" :size="17" />0 个班级</span>

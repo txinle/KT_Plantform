@@ -50,6 +50,45 @@ beforeAll(() => {
 })
 
 describe('TeacherExperimentList deletion', () => {
+  it('keeps a long experiment suffix separate and shows authoritative lifecycle and summary', async () => {
+    const name = '第3章 Verilog程序结构与数据类型（课间小测1-2班）'
+    mocks.api.list.mockResolvedValue(collection([{ ...experiment, name, status: 'frozen', status_label: '已冻结', activity: {
+      lifecycle_status: 'ended', lifecycle_label: '已结束', participant_count: 90,
+      completed_count: 72, in_progress_count: 0, pending_grading_count: 16,
+      grading_url: '/grade/', key_time_label: '结束时间', key_time: '2026-11-16T10:00:00Z',
+      schedules: [{ task_id: 31, class_name: '一班', opens_at: null, closes_at: null }],
+    } }]))
+    const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })
+    await flushPromises()
+    const card = wrapper.get('.kt-experiment-card')
+    expect(card.get('h2 a').attributes('title')).toBe(name)
+    expect(card.get('h2 a').attributes('aria-label')).toBe(name)
+    expect(card.get('h2').text()).toBe('第3章 Verilog程序结构与数据类型')
+    expect(card.get('[data-experiment-subtitle]').text()).toBe('课间小测1-2班')
+    expect(card.get('[data-experiment-lifecycle]').text()).toBe('已结束')
+    expect(card.text()).not.toContain('已冻结')
+    expect(card.get('[data-experiment-summary]').text()).toContain('72 / 90 人')
+    expect(card.get('[data-experiment-summary]').text()).toContain('待批改16 条')
+    expect(card.get('[data-experiment-summary] a').attributes('href')).toBe('/grade/')
+    expect(card.get('time').attributes('datetime')).toBe('2026-11-16T10:00:00Z')
+    wrapper.unmount()
+  })
+
+  it('preserves an unstructured name and keeps unpublished draft statistics empty', async () => {
+    mocks.api.list.mockResolvedValue(collection([{ ...experiment, name: '带有（中间说明）的长实验名称', activity: {
+      lifecycle_status: 'draft', lifecycle_label: '草稿', participant_count: 0,
+      completed_count: 0, in_progress_count: 0, pending_grading_count: 0,
+      grading_url: null, key_time_label: '开始时间', key_time: null, schedules: [],
+    } }]))
+    const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })
+    await flushPromises()
+    expect(wrapper.get('h2').text()).toBe('带有（中间说明）的长实验名称')
+    expect(wrapper.find('[data-experiment-subtitle]').exists()).toBe(false)
+    expect(wrapper.get('[data-experiment-summary]').text()).toContain('尚未发布到班级')
+    expect(wrapper.get('[data-experiment-summary]').text()).not.toContain('0 / 0')
+    wrapper.unmount()
+  })
+
   it('renders one compact card per experiment with accessible filters and authorized actions', async () => {
     mocks.api.list.mockResolvedValue(collection([{ ...experiment, description: 'Do not expand the card with this description', activity: { pending_grading_count: 8, grading_url: '/grade/', schedules: [] } }]))
     const wrapper = mount(TeacherExperimentList, { global: { stubs: { Teleport: true } } })

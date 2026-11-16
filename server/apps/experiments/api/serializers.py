@@ -102,6 +102,13 @@ class ExperimentActivitySerializer(serializers.Serializer):
     pending_grading_count = serializers.IntegerField()
     grading_url = serializers.CharField(allow_null=True)
     schedules = ExperimentActivityScheduleSerializer(many=True)
+    lifecycle_status = serializers.CharField()
+    lifecycle_label = serializers.CharField()
+    participant_count = serializers.IntegerField(min_value=0)
+    completed_count = serializers.IntegerField(min_value=0)
+    in_progress_count = serializers.IntegerField(min_value=0)
+    key_time_label = serializers.CharField()
+    key_time = serializers.DateTimeField(allow_null=True)
 
 
 class TeacherExperimentSerializer(serializers.ModelSerializer):

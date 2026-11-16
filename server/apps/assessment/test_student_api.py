@@ -298,6 +298,41 @@ class StudentApiTestCase(StudentApiFixtureMixin, TestCase):
 
 
 class StudentTaskApiTests(StudentApiTestCase):
+    def test_ended_task_does_not_label_an_unfinished_session_as_answering(self):
+        started = self.start()
+        self.assertEqual(started.status_code, 201, started.content)
+        manual_close_task(self.task, self.teacher, reason='结束实验')
+        item = domain_payload(self.client.get(
+            f'/api/v1/student/courses/{self.course.pk}/tasks/'))['items'][0]
+        self.assertEqual(item['lifecycle_label'], '已结束')
+        self.assertEqual(item['personal_status_label'], '已结束，未完成')
+
+    def test_task_cards_separate_class_lifecycle_from_personal_completion(self):
+        now = timezone.now()
+        _, future = self.publish_task(name='稍后开放', feedback_mode=self.feedback_mode,
+            opens_at=now + timedelta(hours=1), closes_at=now + timedelta(hours=2))
+        self.client.force_login(self.student)
+        url = f'/api/v1/student/courses/{self.course.pk}/tasks/'
+        def listed(task):
+            return next(item for item in domain_payload(self.client.get(url))['items']
+                if item['task_id'] == task.pk)
+        self.assertEqual(listed(future)['lifecycle_label'], '未开始')
+        self.assertEqual(listed(self.task)['lifecycle_label'], '已开始')
+        self.assertEqual(listed(self.task)['personal_status_label'], '未作答')
+        started = self.start()
+        self.assertEqual(started.status_code, 201, started.content)
+        session = ExperimentSession.objects.get(pk=domain_payload(started)['session_id'])
+        self.complete_session(session)
+        completed = listed(self.task)
+        self.assertEqual(completed['lifecycle_status'], 'started')
+        self.assertEqual(completed['personal_status_label'], '已完成')
+        self.assertEqual(completed['primary_action'], 'view_result')
+        manual_close_task(self.task, self.teacher, reason='结束实验')
+        ended = listed(self.task)
+        self.assertEqual(ended['lifecycle_label'], '已结束')
+        self.assertEqual(ended['personal_status_label'], '已完成')
+        self.assertEqual(listed(future)['lifecycle_label'], '未开始')
+
     def test_task_list_exposes_frozen_limit_and_latest_schedule_without_starting(self):
         experiment, task = self.publish_task(name='限时确认', feedback_mode=self.feedback_mode, total_time_limit_minutes=45)
         self.client.force_login(self.student)
@@ -439,6 +474,9 @@ class StudentTaskApiTests(StudentApiTestCase):
                 "experiment_name",
                 "class_name",
                 "business_status",
+                "lifecycle_status",
+                "lifecycle_label",
+                "personal_status_label",
                 "opens_at",
                 "closes_at",
                 "progress",

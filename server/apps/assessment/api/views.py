@@ -174,6 +174,23 @@ def _task_projection(task, *, course):
 
     now = timezone.now()
     business_status = DeadlineDecisionService.get_task_state(task, at=now)
+    lifecycle_status, lifecycle_label = {
+        'scheduled': ('not_started', '未开始'),
+        'open': ('started', '已开始'),
+    }.get(business_status, ('ended', '已结束'))
+    personal_status_label = {
+        ExperimentSession.Status.IN_PROGRESS: '作答中',
+        ExperimentSession.Status.SUBMITTING: '提交处理中',
+        ExperimentSession.Status.COMPLETED: '已完成',
+        ExperimentSession.Status.EXPIRED: '已超时',
+        ExperimentSession.Status.INVALIDATED: '已作废',
+    }.get(session.status if session else None, '未作答')
+    if session is not None and session.status == ExperimentSession.Status.IN_PROGRESS:
+        deadline = DeadlineDecisionService.get_session_deadline(session)
+        if business_status in ('closed', 'manual_closed', 'cancelled', 'invalidated'):
+            personal_status_label = '已结束，未完成'
+        elif deadline is not None and now >= deadline:
+            personal_status_label = '已超时'
     primary_action = None
     available_actions = []
     if session is None:
@@ -199,6 +216,9 @@ def _task_projection(task, *, course):
         "experiment_name": task.experiment.name,
         "class_name": task.class_snapshot.display_name,
         "business_status": business_status,
+        'lifecycle_status': lifecycle_status,
+        'lifecycle_label': lifecycle_label,
+        'personal_status_label': personal_status_label,
         "opens_at": schedule.opens_at if schedule is not None else None,
         "closes_at": schedule.closes_at if schedule is not None else None,
         "total_time_limit_seconds": total_limit or None,

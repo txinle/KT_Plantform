@@ -3932,6 +3932,14 @@ export interface components {
             pending_grading_count: number;
             grading_url: string | null;
             schedules: components["schemas"]["ExperimentActivitySchedule"][];
+            lifecycle_status: string;
+            lifecycle_label: string;
+            participant_count: number;
+            completed_count: number;
+            in_progress_count: number;
+            key_time_label: string;
+            /** Format: date-time */
+            key_time: string | null;
         };
         ExperimentActivitySchedule: {
             task_id: number;
@@ -6530,6 +6538,9 @@ export interface components {
             experiment_name: string;
             class_name: string;
             business_status: string;
+            lifecycle_status: string;
+            lifecycle_label: string;
+            personal_status_label: string;
             /** Format: date-time */
             opens_at: string | null;
             /** Format: date-time */

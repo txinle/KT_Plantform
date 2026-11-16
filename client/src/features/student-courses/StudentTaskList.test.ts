@@ -45,6 +45,7 @@ describe('StudentTaskList', () => {
         experiment_name: '反馈策略实验',
         class_name: '2026 实验一班',
         business_status: 'open',
+        lifecycle_status: 'started', lifecycle_label: '已开始', personal_status_label: '未作答',
         opens_at: null,
         closes_at: null,
         progress: { completed: 0, total: 8 },
@@ -54,6 +55,23 @@ describe('StudentTaskList', () => {
         total_time_limit_seconds: null,
       }],
     })
+  })
+  it('shows class lifecycle separately from personal completion and filters on lifecycle', async () => {
+    const data = await mocks.api.tasks()
+    Object.assign(data.items[0], { personal_status_label: '已完成', primary_action: 'view_result',
+      progress: { completed: 8, total: 8 } })
+    data.items.push({ ...data.items[0], task_id: 20, experiment_name: '未开放实验',
+      business_status: 'scheduled', lifecycle_status: 'not_started', lifecycle_label: '未开始',
+      personal_status_label: '未作答', primary_action: null, progress: { completed: 0, total: 8 } })
+    mocks.api.tasks.mockResolvedValue(data)
+    const wrapper = await mountTaskList()
+    const card = wrapper.get('[aria-label="反馈策略实验"]')
+    expect(card.get('[data-task-lifecycle]').text()).toBe('已开始')
+    expect(card.get('[data-personal-progress]').text()).toContain('已完成')
+    await wrapper.get('select[aria-label="按作业状态筛选"]').setValue('not_started')
+    expect(wrapper.findAll('.kt-student-task-row')).toHaveLength(1)
+    expect(wrapper.get('.kt-student-task-row').text()).toContain('未开放实验')
+    wrapper.unmount()
   })
   it('starts a timed task only after confirmation, not after cancellation or dismissal', async () => {
     const data = await mocks.api.tasks()

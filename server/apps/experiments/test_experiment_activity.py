@@ -1,18 +1,21 @@
 from unittest.mock import patch
+from datetime import timedelta
 
 from django.db import transaction
 from django.test import TestCase
+from django.utils import timezone
 
-from apps.accounts.models import ClassGroup
+from apps.accounts.models import ClassGroup, User
 from apps.api.test_support import domain_payload
 from apps.assessment import test_manual_short_answer_grading as grading_fixture
-from apps.assessment.models import SubmissionEvent
+from apps.assessment.models import ExperimentSession, SubmissionEvent
 from .experiment_activity import experiment_activity_map
 from .models import (
     ClassExperimentTask, Experiment, ExperimentClassSnapshot,
-    ExperimentVersion, ScheduleRevision,
+    ExperimentVersion, ExperimentVersionParticipantSnapshot, ScheduleRevision,
 )
 from .publication_services import _class_experiment_task_publication_scope
+from .services import _class_experiment_task_terminal_update_scope
 
 
 class ExperimentActivityApiTests(TestCase):
@@ -117,3 +120,92 @@ class ExperimentActivityApiTests(TestCase):
         self.client.force_login(self.other_teacher)
         url = f"/api/v1/teacher/courses/{self.course.pk}/experiments/"
         self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_card_lifecycle_uses_class_schedules_instead_of_definition_status(self):
+        now = timezone.now()
+        ScheduleRevision.objects.create(class_task=self.task, revision_no=1,
+            opens_at=now + timedelta(hours=1), closes_at=now + timedelta(hours=2))
+        activity = experiment_activity_map([self.experiment], can_grade=True)[self.experiment.pk]
+        self.assertEqual(activity['lifecycle_status'], 'not_started')
+        self.assertEqual(activity['lifecycle_label'], '未开始')
+        self.assertEqual(activity['key_time_label'], '开始时间')
+        self.assertEqual(activity['key_time'], now + timedelta(hours=1))
+
+        ScheduleRevision.objects.create(class_task=self.task, revision_no=2,
+            opens_at=now - timedelta(hours=2), closes_at=now - timedelta(hours=1))
+        activity = experiment_activity_map([self.experiment], can_grade=True)[self.experiment.pk]
+        self.assertEqual(activity['lifecycle_status'], 'ended')
+        self.assertEqual(activity['lifecycle_label'], '已结束')
+        self.assertEqual(activity['key_time'], now - timedelta(hours=1))
+        self.assertEqual(activity['pending_grading_count'], 1)
+
+        future = self.create_empty_task(class_name='未来班级')
+        ScheduleRevision.objects.create(class_task=future, revision_no=1,
+            opens_at=now + timedelta(hours=1), closes_at=now + timedelta(hours=2))
+        activity = experiment_activity_map([self.experiment], can_grade=True)[self.experiment.pk]
+        self.assertEqual(activity['lifecycle_status'], 'started')
+        self.assertEqual(activity['key_time_label'], '最近截止')
+        self.assertEqual(activity['key_time'], now + timedelta(hours=2))
+
+    def test_card_lifecycle_honors_manual_closure_and_reopening(self):
+        now = timezone.now()
+        self.task.manual_closed_at = now - timedelta(minutes=1)
+        with _class_experiment_task_terminal_update_scope():
+            self.task.save(update_fields=['manual_closed_at'])
+        activity = experiment_activity_map([self.experiment], can_grade=True)[self.experiment.pk]
+        self.assertEqual(activity['lifecycle_status'], 'ended')
+        self.assertEqual(activity['key_time'], self.task.manual_closed_at)
+        ScheduleRevision.objects.create(class_task=self.task, revision_no=1,
+            reopens_manual_close=True, closes_at=now + timedelta(hours=1))
+        activity = experiment_activity_map([self.experiment], can_grade=True)[self.experiment.pk]
+        self.assertEqual(activity['lifecycle_status'], 'started')
+
+    def test_card_counts_frozen_participants_without_prepared_or_expired_sessions(self):
+        participant = ExperimentVersionParticipantSnapshot.objects.create(
+            version=self.version, class_task=self.task, student=self.student)
+        ExperimentSession.objects.filter(class_task=self.task).update(participant_snapshot=participant,
+            status=ExperimentSession.Status.COMPLETED, terminal_at=timezone.now())
+        for index, status in enumerate([ExperimentSession.Status.PREPARED,
+                ExperimentSession.Status.IN_PROGRESS, ExperimentSession.Status.SUBMITTING,
+                ExperimentSession.Status.EXPIRED]):
+            student = User.objects.create_user(username=f'card-student-{index}', role=User.Role.STUDENT)
+            snapshot = ExperimentVersionParticipantSnapshot.objects.create(
+                version=self.version, class_task=self.task, student=student)
+            ExperimentSession.objects.create(version=self.version, class_task=self.task,
+                participant_snapshot=snapshot, student=student, status=status,
+                started_at=None if status == ExperimentSession.Status.PREPARED else timezone.now())
+        User.objects.create_user(username='not-a-published-participant', role=User.Role.STUDENT)
+        self.client.force_login(self.teacher)
+        activity = domain_payload(self.client.get(
+            f'/api/v1/teacher/courses/{self.course.pk}/experiments/'))['items'][0]['activity']
+        self.assertEqual(activity['participant_count'], 5)
+        self.assertEqual(activity['completed_count'], 1)
+        self.assertEqual(activity['in_progress_count'], 2)
+        self.assertEqual(activity['lifecycle_label'], '已开始')
+        now = timezone.now()
+        ScheduleRevision.objects.create(class_task=self.task, revision_no=1,
+            opens_at=now - timedelta(hours=2), closes_at=now - timedelta(hours=1))
+        ended = experiment_activity_map([self.experiment], can_grade=True)[self.experiment.pk]
+        self.assertEqual(ended['in_progress_count'], 0)
+        self.assertEqual(ended['completed_count'], 1)
+
+    def test_participants_in_multiple_classes_are_counted_as_people(self):
+        participant = ExperimentVersionParticipantSnapshot.objects.create(
+            version=self.version, class_task=self.task, student=self.student)
+        ExperimentSession.objects.filter(class_task=self.task).update(participant_snapshot=participant,
+            status=ExperimentSession.Status.COMPLETED, terminal_at=timezone.now())
+        other_task = self.create_empty_task(class_name='同一学生的另一班级任务')
+        ExperimentVersionParticipantSnapshot.objects.create(
+            version=self.version, class_task=other_task, student=self.student)
+        activity = experiment_activity_map([self.experiment], can_grade=True)[self.experiment.pk]
+        self.assertEqual(activity['participant_count'], 1)
+        self.assertEqual(activity['completed_count'], 0)
+
+    def test_unpublished_draft_has_no_formal_participant_counts(self):
+        draft = Experiment.objects.create(course=self.course, owner=self.teacher,
+            question_bank=self.bank, name='新建草稿')
+        activity = experiment_activity_map([draft], can_grade=True)[draft.pk]
+        self.assertEqual(activity['lifecycle_status'], 'draft')
+        self.assertEqual(activity['lifecycle_label'], '草稿')
+        self.assertEqual(activity['participant_count'], 0)
+        self.assertIsNone(activity['key_time'])
