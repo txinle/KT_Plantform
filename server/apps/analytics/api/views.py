@@ -2,7 +2,7 @@ from math import ceil
 from urllib.parse import urlencode
 
 from django.conf import settings
-from django.db.models import Count, Q
+from django.db.models import Count, F, Q
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
@@ -533,6 +533,8 @@ class TeacherDataCenterExportCatalogView(APIView):
                 session__in=terminal,
                 status=ResearchSessionMaterialization.Status.SUCCEEDED,
                 is_current=True,
+                projection_version=PROJECTION_VERSION,
+                source_revision=F("session__research_source_revision"),
             )
             ready_ids = current.values_list("session_id", flat=True)
             fact_rows = current.filter(

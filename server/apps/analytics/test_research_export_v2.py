@@ -187,6 +187,38 @@ class ResearchExportCatalogV2Tests(TestCase):
         self.assertEqual(totals["responses"], 1)
         self.assertEqual(totals["behavior_events"], 2)
 
+    def test_catalog_blocks_materializations_from_before_regrading(self):
+        session = self.attempt.session
+        session.research_source_revision += 1
+        session.save(update_fields=["research_source_revision"])
+
+        response = self.client.get(self.api("exports/"), {
+            "scope_version": 2,
+            "experiment_id": self.experiment.pk,
+            "class_mode": "all",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        payload = domain_payload(response)
+        self.assertEqual(payload["preparation"], {
+            "state": "preparing", "ready_count": 0, "pending_count": 1,
+        })
+        totals = {item["key"]: item["total_items"] for item in payload["tables"]}
+        self.assertEqual(totals["session_bindings"], 0)
+        self.assertEqual(totals["responses"], 0)
+
+    def test_catalog_blocks_obsolete_projection_versions(self):
+        ResearchSessionMaterialization.objects.filter(session=self.attempt.session).update(
+            projection_version="obsolete-projection",
+        )
+        response = self.client.get(self.api("exports/"), {
+            "scope_version": 2,
+            "experiment_id": self.experiment.pk,
+            "class_mode": "all",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(domain_payload(response)["preparation"]["pending_count"], 1)
+
 
 class ResearchExportContractV2Tests(TestCase):
     def test_session_binding_contract_contains_class_column(self):
