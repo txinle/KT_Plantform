@@ -21,12 +21,13 @@ async function openSingleClassExport(page: Page, path: string) {
     experiment_id: 1, class_mode: 'single', class_id: 1,
   })
   const scope = page.getByRole('region', { name: '当前数据范围', exact: true })
-  await expect(scope).toContainText('认知追踪实验班')
-  await scope.locator('summary').click()
-  await expect(scope.locator('input[name="experiment_id"][value="1"]')).toBeChecked()
-  await expect(scope.locator('select[name="export_class_range"]')).toHaveValue('1')
-  await expect(scope.locator('select[name="export_class_range"]')).toBeVisible()
-  await scope.locator('summary').click()
+  const experiment = scope.locator('select[name="experiment_id"]')
+  const classes = scope.locator('select[name="export_class_range"]')
+  await expect(experiment).toBeVisible()
+  await expect(experiment).toHaveValue('1')
+  await expect(classes).toBeVisible()
+  await expect(classes).toHaveValue('1')
+  await expect(classes.locator('option:checked')).toContainText('认知追踪实验班')
 }
 
 
@@ -41,7 +42,9 @@ test('research export v2 scope is usable on desktop, mobile and 200 percent zoom
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
     await openSingleClassExport(page, path)
     await expect(page.getByRole('heading', { name: '导出研究数据' })).toBeVisible()
-    await expect(page.getByTestId('export-table')).toHaveCount(8)
+    const files = page.locator('[data-export-files]')
+    await files.locator('summary').click()
+    await expect(files.getByTestId('export-table')).toHaveCount(8)
     await expect(page.getByText('表2覆盖当前实验全部已发布班级，并包含班级列')).toBeVisible()
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),

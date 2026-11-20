@@ -576,18 +576,28 @@ test('data-center saves its authoritative scope through the JSON API', async ({ 
   await page.goto('http://127.0.0.1:8000/teacher/courses/1/data/')
 
   const scope = page.getByRole('region', { name: '当前数据范围' })
-  const experiment = scope.locator('label').filter({ hasText: '演示交互数据采集' })
-  await experiment.click()
-  await expect(experiment.getByRole('checkbox')).toBeChecked()
-  await scope.locator('select[name="class_id"]').selectOption({ label: '2026 认知追踪实验班' })
+  const picker = scope.locator('[data-experiment-picker]')
+  await picker.locator('summary').click()
+  const experiment = picker.locator('label').filter({ hasText: '演示交互数据采集' })
+  const checkbox = experiment.getByRole('checkbox')
+  if (!await checkbox.isChecked()) await experiment.click()
+  await expect(checkbox).toBeChecked()
+  const experimentId = Number(await checkbox.inputValue())
+  await picker.getByRole('button', { name: '完成选择' }).click()
+  const classSelect = scope.locator('select[name="class_id"]')
+  const [classId] = await classSelect.selectOption({ label: '2026 认知追踪实验班' })
   const saved = page.waitForResponse((response) => (
     response.request().method() === 'POST'
     && response.url().endsWith('/api/v1/teacher/courses/1/data/scope/')
   ))
   await scope.getByRole('button', { name: '应用' }).click()
-  expect((await saved).status()).toBe(200)
-  await expect(scope).toContainText('班级：2026 认知追踪实验班')
-  await expect(scope).toContainText('已选择实验：演示交互数据采集（1 个实验）')
+  const response = await saved
+  expect(response.status()).toBe(200)
+  expect((await response.json()).data.current).toMatchObject({
+    experiment_ids: [experimentId], class_id: Number(classId),
+  })
+  await expect(picker.locator('summary')).toHaveText('演示交互数据采集')
+  await expect(classSelect.locator('option:checked')).toHaveText('2026 认知追踪实验班')
 })
 
 test('data-center overview and advanced pages reflow at required viewports', async ({ browserName, page }, testInfo) => {
