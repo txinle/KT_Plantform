@@ -188,13 +188,13 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutsidePicke
     main-id="data-center-main"
   >
     <template #navigation>
-      <a href="/teacher/courses/">我的课程</a>
-      <a :href="`/teacher/courses/${courseId}/`">概览</a>
-      <a :href="`/teacher/courses/${courseId}/banks/`">题库</a>
-      <a :href="`/teacher/courses/${courseId}/classes/`">班级</a>
-      <a :href="`/teacher/courses/${courseId}/experiments/`">实验</a>
+      <RouterLink to="/teacher/courses/">我的课程</RouterLink>
+      <RouterLink :to="`/teacher/courses/${courseId}/`">概览</RouterLink>
+      <RouterLink :to="`/teacher/courses/${courseId}/banks/`">题库</RouterLink>
+      <RouterLink :to="`/teacher/courses/${courseId}/classes/`">班级</RouterLink>
+      <RouterLink :to="`/teacher/courses/${courseId}/experiments/`">实验</RouterLink>
       <RouterLink :to="dataLocation()" aria-current="page">数据</RouterLink>
-      <a :href="`/teacher/courses/${courseId}/settings/`">设置</a>
+      <RouterLink :to="`/teacher/courses/${courseId}/settings/`">设置</RouterLink>
     </template>
     <SidebarSection>
       <nav class="kt-data-nav kt-sidebar-secondary-nav" aria-label="数据中心导航">

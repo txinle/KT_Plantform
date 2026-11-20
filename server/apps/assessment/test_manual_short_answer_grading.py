@@ -5,6 +5,7 @@ from threading import Barrier
 
 from django.db import close_old_connections, connection, transaction
 from django.test import TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, Course, CourseTeacher, User
@@ -177,8 +178,10 @@ class ManualShortAnswerGradingTests(TransactionTestCase):
             ],
         )
         self.client.force_login(self.teacher)
-        response = self.client.get(f"/api/v1/teacher/class-tasks/{self.task.pk}/grading/")
+        with CaptureQueriesContext(connection) as captured:
+            response = self.client.get(f"/api/v1/teacher/class-tasks/{self.task.pk}/grading/")
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(sum('FROM "assessment_submissionevent"' in q["sql"] for q in captured), 1)
         overview = domain_payload(response)
         self.assertEqual(overview["totals"]["short_answer_questions"], 1)
         self.assertEqual(

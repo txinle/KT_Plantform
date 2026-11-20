@@ -25,13 +25,13 @@ const bootstrap = getBootstrapContext()
       :main-id="mainId"
     >
       <template #navigation>
-        <a href="/teacher/courses/">我的课程</a>
+        <RouterLink to="/teacher/courses/">我的课程</RouterLink>
         <RouterLink :to="`/teacher/courses/${courseId}/`" :aria-current="active === 'overview' ? 'page' : undefined">概览</RouterLink>
-        <a :href="course?.banks_url || `/teacher/courses/${courseId}/banks/`">题库</a>
-        <a :href="course?.classes_url || `/teacher/courses/${courseId}/classes/`">班级</a>
-        <a :href="course?.experiments_url || `/teacher/courses/${courseId}/experiments/`">实验</a>
-        <a :href="course?.data_url || `/teacher/courses/${courseId}/data/`">数据</a>
-        <a :href="course?.settings_url || `/teacher/courses/${courseId}/settings/`" :aria-current="active === 'settings' ? 'page' : undefined">设置</a>
+        <RouterLink :to="course?.banks_url || `/teacher/courses/${courseId}/banks/`">题库</RouterLink>
+        <RouterLink :to="course?.classes_url || `/teacher/courses/${courseId}/classes/`">班级</RouterLink>
+        <RouterLink :to="course?.experiments_url || `/teacher/courses/${courseId}/experiments/`">实验</RouterLink>
+        <RouterLink :to="course?.data_url || `/teacher/courses/${courseId}/data/`">数据</RouterLink>
+        <RouterLink :to="course?.settings_url || `/teacher/courses/${courseId}/settings/`" :aria-current="active === 'settings' ? 'page' : undefined">设置</RouterLink>
       </template>
       <slot />
     </WorkspaceShell>

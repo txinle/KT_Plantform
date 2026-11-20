@@ -15,7 +15,7 @@ const bootstrap = getBootstrapContext()
     main-id="teacher-account-management-main"
   >
     <template #navigation>
-      <a href="/teacher/courses/">我的课程</a>
+      <RouterLink to="/teacher/courses/">我的课程</RouterLink>
       <RouterLink to="/teacher/accounts/classes/">班级管理</RouterLink>
       <RouterLink to="/teacher/accounts/students/">学生账号</RouterLink>
     </template>

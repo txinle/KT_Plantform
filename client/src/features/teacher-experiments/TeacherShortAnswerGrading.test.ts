@@ -68,6 +68,9 @@ describe('TeacherShortAnswerGrading', () => {
   it('switches authorized classes and reloads task-scoped grading after navigation', async () => {
     const wrapper = mount(TeacherShortAnswerGrading)
     await flushPromises()
+    expect(mocks.api.classTasks).not.toHaveBeenCalled()
+    await wrapper.get('button[aria-label="切换班级"]').trigger('click')
+    await flushPromises()
     const select = wrapper.get('select[aria-label="切换班级"]')
     expect(select.findAll('option').map(option => option.text())).toEqual(['一班 · 待批改：1', '二班 · 待批改：0'])
     await select.setValue('18')
@@ -85,6 +88,19 @@ describe('TeacherShortAnswerGrading', () => {
     await wrapper.get('[data-grade="correct"]').trigger('click')
     await flushPromises()
     expect(mocks.api.gradeSubmission.mock.calls[0]![0]).toBe(18)
+  })
+
+  it('keeps the current class usable when class choices fail', async () => {
+    mocks.api.classTasks.mockRejectedValueOnce(new Error('班级列表暂不可用'))
+    const wrapper = mount(TeacherShortAnswerGrading)
+    await flushPromises()
+    expect(wrapper.text()).toContain('学生回答')
+    await wrapper.get('button[aria-label="切换班级"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('班级列表暂不可用')
+    await wrapper.get('[data-grade="correct"]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.gradeSubmission).toHaveBeenCalledOnce()
   })
 
   it('shows frozen references and submits a binary decision', async () => {
@@ -242,7 +258,7 @@ describe('TeacherShortAnswerGrading', () => {
     await flushPromises()
     finish(previous)
     await flushPromises()
-    expect(wrapper.get('select[aria-label="切换班级"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('button[aria-label="切换班级"]').attributes('disabled')).toBeUndefined()
     expect(wrapper.find('[data-grading-row]').exists()).toBe(false)
   })
 })

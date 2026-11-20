@@ -210,4 +210,10 @@ test('grading columns contain long lists and keep compact question navigation us
     await page.evaluate(() => window.scrollTo(0, 0))
     await page.screenshot({ path: testInfo.outputPath(`${viewport.name}.png`), fullPage: false })
   }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const documentStart = await page.evaluate(() => performance.timeOrigin)
+  await page.getByRole('navigation', { name: '课程导航' }).getByRole('link', { name: '我的课程' }).click()
+  await expect(page).toHaveURL(/\/teacher\/courses\/$/)
+  await expect(page.getByRole('heading', { name: '我的课程' })).toBeVisible()
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStart)
 })

@@ -1,13 +1,15 @@
 from unittest.mock import patch
 from datetime import timedelta
 
-from django.db import transaction
+from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.test import TestCase
 from django.utils import timezone
 
 from apps.accounts.models import ClassGroup, User
 from apps.api.test_support import domain_payload
 from apps.assessment import test_manual_short_answer_grading as grading_fixture
+from apps.assessment.deadline_services import DeadlineDecisionService
 from apps.assessment.models import ExperimentSession, SubmissionEvent
 from .experiment_activity import experiment_activity_map
 from .models import (
@@ -68,6 +70,37 @@ class ExperimentActivityApiTests(TestCase):
                 release_snapshot=version, class_snapshot=class_snapshot,
                 published_at=version.published_at, published_by=self.teacher,
             )
+
+    def test_class_task_list_reads_submissions_once_for_multiple_classes(self):
+        empty = self.create_empty_task()
+        for task in (self.task, empty):
+            ScheduleRevision.objects.create(class_task=task, revision_no=1)
+        ExperimentVersionParticipantSnapshot.objects.create(
+            version=self.version, class_task=empty, student=self.student,
+            assignment_snapshot=[{"question_snapshot_id": self.snapshot.pk}],
+        )
+        self.client.force_login(self.teacher)
+        with CaptureQueriesContext(connection) as captured:
+            response = self.client.get(f"/api/v1/teacher/experiments/{self.experiment.pk}/class-tasks/")
+        rows = {row["id"]: row["grading"] for row in domain_payload(response)["items"]}
+        self.assertEqual(rows[self.task.pk], dict(enabled=True, short_answer_questions=1, submitted=1, graded=0, pending=1))
+        self.assertEqual(rows[empty.pk], dict(enabled=True, short_answer_questions=1, submitted=0, graded=0, pending=0))
+        sql = [q["sql"] for q in captured if 'FROM "assessment_submissionevent"' in q["sql"]]
+        self.assertEqual(len(sql), 1)
+
+    def test_activity_materializes_only_the_effective_revision_per_task(self):
+        for number in range(1, 5):
+            ScheduleRevision.objects.create(class_task=self.task, revision_no=number)
+        original = DeadlineDecisionService.schedule_at
+        observed = []
+
+        def inspect_schedule(task, at):
+            observed.append([row.revision_no for row in task.latest_schedule_revisions])
+            return original(task, at)
+
+        with patch.object(DeadlineDecisionService, "schedule_at", side_effect=inspect_schedule):
+            experiment_activity_map([self.experiment], can_grade=True)
+        self.assertEqual(observed, [[4]])
 
     def test_manual_grading_entry_is_available_before_first_submission(self):
         empty_experiment = Experiment.objects.create(

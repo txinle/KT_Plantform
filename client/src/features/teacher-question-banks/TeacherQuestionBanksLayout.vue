@@ -30,13 +30,13 @@ onMounted(async () => {
       main-id="question-bank-main"
     >
       <template #navigation>
-        <a href="/teacher/courses/">我的课程</a>
-        <a :href="`/teacher/courses/${courseId}/`">概览</a>
+        <RouterLink to="/teacher/courses/">我的课程</RouterLink>
+        <RouterLink :to="`/teacher/courses/${courseId}/`">概览</RouterLink>
         <RouterLink :to="`/teacher/courses/${courseId}/banks/`" aria-current="page">题库</RouterLink>
-        <a :href="`/teacher/courses/${courseId}/classes/`">班级</a>
-        <a :href="`/teacher/courses/${courseId}/experiments/`">实验</a>
-        <a :href="`/teacher/courses/${courseId}/data/`">数据</a>
-        <a :href="`/teacher/courses/${courseId}/settings/`">设置</a>
+        <RouterLink :to="`/teacher/courses/${courseId}/classes/`">班级</RouterLink>
+        <RouterLink :to="`/teacher/courses/${courseId}/experiments/`">实验</RouterLink>
+        <RouterLink :to="`/teacher/courses/${courseId}/data/`">数据</RouterLink>
+        <RouterLink :to="`/teacher/courses/${courseId}/settings/`">设置</RouterLink>
       </template>
       <p v-if="contextError" role="alert">{{ contextError }}</p>
       <RouterView />

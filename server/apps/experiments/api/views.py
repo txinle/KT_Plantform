@@ -17,7 +17,7 @@ from apps.api.pagination import FixedPageNumberPagination
 from apps.api.permissions import RolePermission
 from apps.assessment.deadline_services import DeadlineDecisionService
 from apps.assessment.feedback_services import FeedbackReleaseError, release_task_feedback
-from apps.assessment.manual_grading_services import task_grading_summary
+from apps.assessment.manual_grading_services import task_grading_summaries, task_grading_summary
 from apps.assessment.models import ExperimentSession
 from apps.assessment.services import can_recover_session
 from apps.audit.services import log_action
@@ -325,13 +325,14 @@ def _task_projection_queryset(queryset):
     )
 
 
-def _task_projection(task, *, now=None):
+def _task_projection(task, *, now=None, grading=None):
     if not hasattr(task, "latest_schedule_revisions"):
         task = _task_projection_queryset(ClassExperimentTask.objects.all()).get(pk=task.pk)
     schedule = next(iter(task.latest_schedule_revisions), None)
     now = now or database_now()
     task_state = DeadlineDecisionService.get_task_state(task, at=now)
-    grading = task_grading_summary(task)
+    if grading is None:
+        grading = task_grading_summary(task)
     configuration = task.release_snapshot.configuration
     time_mode = configuration.get("time_mode")
     return {
@@ -1107,7 +1108,8 @@ class TeacherExperimentClassTaskListView(TeacherClassTaskMixin, APIView):
             "class_group__academic_year", "class_group__name", "pk"
         )
         now = database_now()
-        return Response({"items": [_task_projection(task, now=now) for task in tasks]})
+        summaries = task_grading_summaries(tasks)
+        return Response({"items": [_task_projection(task, now=now, grading=summaries[task.pk]) for task in tasks]})
 
 
 class TeacherExperimentCollectionParticipantView(APIView):

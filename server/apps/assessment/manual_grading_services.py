@@ -4,7 +4,7 @@ from django.db import transaction
 from django.db.models import Count, Q
 
 from apps.audit.models import AuditLog
-from apps.experiments.models import ClassExperimentTask
+from apps.experiments.models import ClassExperimentTask, ExperimentVersionParticipantSnapshot, QuestionSnapshot
 
 from .models import GradeRecord, SubmissionEvent
 from .services import grade_submission
@@ -25,54 +25,76 @@ def task_uses_manual_short_answer_grading(task):
     ) == MANUAL_BINARY_POLICY
 
 
+def _short_answer_submissions(task_ids):
+    return SubmissionEvent.objects.filter(
+        attempt__session__class_task_id__in=task_ids,
+        attempt__assignment__snapshot__question_type="short_answer",
+    ).order_by()
+
+
+def _assigned_question_ids(tasks, submitted_pairs):
+    candidates = {task.pk: set() for task in tasks}
+    for task_id, question_id in submitted_pairs:
+        candidates[task_id].add(question_id)
+    assignments = ExperimentVersionParticipantSnapshot.objects.filter(
+        class_task_id__in=candidates
+    ).values_list("class_task_id", "assignment_snapshot")
+    for task_id, items in assignments:
+        candidates[task_id].update(
+            int(item["question_snapshot_id"]) for item in (items or []) if item.get("question_snapshot_id")
+        )
+    versions = dict(QuestionSnapshot.objects.filter(
+        version_id__in=[task.release_snapshot_id for task in tasks],
+        pk__in=set().union(*candidates.values()), question_type="short_answer",
+    ).values_list("pk", "version_id"))
+    return {
+        task.pk: {qid for qid in candidates[task.pk] if versions.get(qid) == task.release_snapshot_id}
+        for task in tasks
+    }
+
+
 def task_short_answer_snapshot_ids(task):
-    snapshot_ids = set(
-        SubmissionEvent.objects.filter(
-            attempt__session__class_task=task,
-            attempt__assignment__snapshot__question_type="short_answer",
-        ).values_list("attempt__assignment__snapshot_id", flat=True)
+    submitted = _short_answer_submissions([task.pk]).values_list(
+        "attempt__session__class_task_id", "attempt__assignment__snapshot_id",
+    ).distinct()
+    return _assigned_question_ids([task], submitted)[task.pk]
+
+
+def _grading_data(tasks):
+    summaries = {
+        task.pk: {
+            "enabled": task_uses_manual_short_answer_grading(task),
+            "short_answer_questions": 0, "submitted": 0, "pending": 0, "graded": 0,
+        }
+        for task in tasks
+    }
+    manual = [task for task in tasks if summaries[task.pk]["enabled"]]
+    rows = _short_answer_submissions([task.pk for task in manual]).values_list(
+        "attempt__session__class_task_id", "attempt__assignment__snapshot_id",
+    ).annotate(
+        submitted=Count("pk"),
+        graded=Count("pk", filter=Q(grading_status=SubmissionEvent.GradingStatus.COMPLETED)),
     )
-    for assignment_snapshot in task.participant_snapshots.values_list(
-        "assignment_snapshot", flat=True
-    ):
-        for item in assignment_snapshot or []:
-            snapshot_id = item.get("question_snapshot_id")
-            if snapshot_id:
-                snapshot_ids.add(snapshot_id)
-    return set(task.release_snapshot.question_snapshots.filter(
-        pk__in=snapshot_ids, question_type="short_answer",
-    ).values_list("pk", flat=True))
+    counts = {}
+    for task_id, qid, submitted, graded in rows:
+        counts[task_id, qid] = (submitted, graded)
+        summary = summaries[task_id]
+        summary["submitted"] += submitted
+        summary["graded"] += graded
+        summary["pending"] += submitted - graded
+    assigned = _assigned_question_ids(manual, counts)
+    for task_id, question_ids in assigned.items():
+        summaries[task_id]["short_answer_questions"] = len(question_ids)
+    return summaries, assigned, counts
+
+
+def task_grading_summaries(tasks):
+    summaries, _, _ = _grading_data(tasks)
+    return summaries
 
 
 def task_grading_summary(task):
-    if not task_uses_manual_short_answer_grading(task):
-        return {
-            "enabled": False,
-            "short_answer_questions": 0,
-            "submitted": 0,
-            "pending": 0,
-            "graded": 0,
-        }
-    submissions = SubmissionEvent.objects.filter(
-        attempt__session__class_task=task,
-        attempt__assignment__snapshot__question_type="short_answer",
-    )
-    counts = submissions.aggregate(
-        submitted=Count("pk"),
-        pending=Count(
-            "pk",
-            filter=~Q(grading_status=SubmissionEvent.GradingStatus.COMPLETED),
-        ),
-        graded=Count(
-            "pk",
-            filter=Q(grading_status=SubmissionEvent.GradingStatus.COMPLETED),
-        ),
-    )
-    return {
-        "enabled": True,
-        "short_answer_questions": len(task_short_answer_snapshot_ids(task)),
-        **counts,
-    }
+    return task_grading_summaries([task])[task.pk]
 
 
 def grading_submission_projection(submission):
@@ -108,41 +130,21 @@ def grading_submission_projection(submission):
 
 
 def task_grading_overview(task):
-    snapshot_ids = task_short_answer_snapshot_ids(task)
+    summaries, assigned, counts = _grading_data([task])
     snapshots = task.release_snapshot.question_snapshots.filter(
-        pk__in=snapshot_ids,
-        question_type="short_answer",
+        pk__in=assigned.get(task.pk, ()),
     ).order_by("source_sequence", "pk")
-    count_rows = {
-        row["attempt__assignment__snapshot_id"]: row
-        for row in SubmissionEvent.objects.filter(
-            attempt__session__class_task=task,
-            attempt__assignment__snapshot_id__in=snapshot_ids,
-        )
-        .values("attempt__assignment__snapshot_id")
-        .annotate(
-            submitted_count=Count("pk"),
-            pending_count=Count(
-                "pk",
-                filter=~Q(grading_status=SubmissionEvent.GradingStatus.COMPLETED),
-            ),
-            graded_count=Count(
-                "pk",
-                filter=Q(grading_status=SubmissionEvent.GradingStatus.COMPLETED),
-            ),
-        )
-    }
     questions = []
     for snapshot in snapshots:
-        counts = count_rows.get(snapshot.pk, {})
+        submitted, graded = counts.get((task.pk, snapshot.pk), (0, 0))
         questions.append(
             {
                 "question_snapshot_id": snapshot.pk,
                 "code": snapshot.code,
                 "text_summary": snapshot.text[:120],
-                "submitted_count": counts.get("submitted_count", 0),
-                "pending_count": counts.get("pending_count", 0),
-                "graded_count": counts.get("graded_count", 0),
+                "submitted_count": submitted,
+                "pending_count": submitted - graded,
+                "graded_count": graded,
             }
         )
     return {
@@ -153,7 +155,7 @@ def task_grading_overview(task):
             "class_id": task.class_group_id,
             "class_name": str(task.class_group),
         },
-        "totals": task_grading_summary(task),
+        "totals": summaries[task.pk],
         "questions": questions,
     }
 

@@ -17,6 +17,9 @@ async function render(path = '/teacher/courses/7/banks/12/') {
   ] })
   const wrapper = mount(CourseSwitcher, { props: { courseName: '英语', csrfToken: 'token' }, global: { plugins: [router] } })
   await flushPromises()
+  expect(mocks.get).not.toHaveBeenCalled()
+  await wrapper.get('button[aria-label="切换课程"]').trigger('click')
+  await flushPromises()
   return { wrapper, router }
 }
 

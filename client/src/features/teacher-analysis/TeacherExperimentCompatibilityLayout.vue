@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { RouterView, useRoute } from 'vue-router'
+import { RouterLink, RouterView, useRoute } from 'vue-router'
 
 import { createApiClient } from '@/api/client'
 import type { components } from '@/api/generated/schema'
@@ -29,13 +29,13 @@ onMounted(async () => {
     main-id="teacher-experiment-result-main"
   >
     <template #navigation>
-      <a href="/teacher/courses/">我的课程</a>
-      <a :href="`/teacher/courses/${courseId}/`">概览</a>
-      <a :href="`/teacher/courses/${courseId}/banks/`">题库</a>
-      <a :href="`/teacher/courses/${courseId}/classes/`">班级</a>
-      <a :href="`/teacher/courses/${courseId}/experiments/`" aria-current="page">实验</a>
-      <a :href="`/teacher/courses/${courseId}/data/`">数据</a>
-      <a :href="`/teacher/courses/${courseId}/settings/`">设置</a>
+      <RouterLink to="/teacher/courses/">我的课程</RouterLink>
+      <RouterLink :to="`/teacher/courses/${courseId}/`">概览</RouterLink>
+      <RouterLink :to="`/teacher/courses/${courseId}/banks/`">题库</RouterLink>
+      <RouterLink :to="`/teacher/courses/${courseId}/classes/`">班级</RouterLink>
+      <RouterLink :to="`/teacher/courses/${courseId}/experiments/`" aria-current="page">实验</RouterLink>
+      <RouterLink :to="`/teacher/courses/${courseId}/data/`">数据</RouterLink>
+      <RouterLink :to="`/teacher/courses/${courseId}/settings/`">设置</RouterLink>
     </template>
     <RouterView />
   </WorkspaceShell>

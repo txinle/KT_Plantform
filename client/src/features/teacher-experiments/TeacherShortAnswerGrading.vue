@@ -22,8 +22,10 @@ const api = getTeacherExperimentApi()
 const courseId = Number(route.params.courseId)
 const experimentId = Number(route.params.experimentId)
 const taskId = computed(() => Number(route.params.taskId))
-const classTasks = ref<ClassTask[]>([])
-const gradingClasses = computed(() => classTasks.value.filter(task => task.available_actions.includes('grade_short_answers')))
+const gradingClasses = ref<ClassTask[]>()
+const classesLoading = ref(false)
+const classesError = ref('')
+const classSelect = ref<HTMLSelectElement>()
 let loadVersion = 0
 let questionVersion = 0
 
@@ -83,15 +85,35 @@ async function loadQuestion(snapshotId: number, nextPage = 1, nextFilter = statu
   }
 }
 
+async function loadClasses() {
+  if (classesLoading.value) return
+  const version = loadVersion
+  classesLoading.value = true
+  classesError.value = ''
+  try {
+    const tasks = await api.classTasks(experimentId)
+    if (version !== loadVersion) return
+    gradingClasses.value = tasks.items.filter(task => task.available_actions.includes('grade_short_answers'))
+    await nextTick()
+    classSelect.value?.focus()
+  } catch (caught) {
+    if (version === loadVersion) classesError.value = caught instanceof Error ? caught.message : '班级列表加载失败。'
+  } finally {
+    if (version === loadVersion) classesLoading.value = false
+  }
+}
+
 async function load() {
   const version = ++loadVersion
+  gradingClasses.value = undefined
+  classesLoading.value = false
+  classesError.value = ''
   loading.value = true
   error.value = ''
   try {
-    const [result, tasks] = await Promise.all([api.grading(taskId.value), api.classTasks(experimentId)])
+    const result = await api.grading(taskId.value)
     if (version !== loadVersion) return
     overview.value = result
-    classTasks.value = tasks.items
     const preferred = overview.value.questions.find(
       question => question.question_snapshot_id === selectedQuestionId.value,
     ) || overview.value.questions[0]
@@ -171,7 +193,7 @@ function defer(row: ManualGradingSubmission) {
 
 function switchClass(event: Event) {
   const id = Number((event.target as HTMLSelectElement).value)
-  if (id === taskId.value || !gradingClasses.value.some(task => task.id === id)) return
+  if (id === taskId.value || !gradingClasses.value?.some(task => task.id === id)) return
   void router.push(pageUrl(`/teacher/courses/${courseId}/experiments/${experimentId}/class-tasks/${id}/grading/`))
 }
 
@@ -201,9 +223,14 @@ watch(taskId, () => {
           <h1>人工批改</h1>
           <div class="kt-grading-context">
             <span v-if="overview">{{ overview.task.experiment_name }}</span>
-            <select v-if="gradingClasses.length" class="kt-grading-class-switch" :value="taskId" aria-label="切换班级" :disabled="loading || busy" @change="switchClass">
+            <button v-if="overview && !gradingClasses" type="button" class="kt-button kt-button--secondary" aria-label="切换班级" :disabled="classesLoading || loading || busy" @click="loadClasses">
+              {{ overview.task.class_name }} · {{ classesLoading ? '正在加载班级…' : '切换班级' }}
+            </button>
+            <span v-if="classesError" role="alert">{{ classesError }}</span>
+            <select v-if="gradingClasses?.length" ref="classSelect" class="kt-grading-class-switch" :value="taskId" aria-label="切换班级" :disabled="loading || busy" @change="switchClass">
               <option v-for="task in gradingClasses" :key="task.id" :value="task.id">{{ task.class_name }} · 待批改：{{ task.grading.pending ?? 0 }}</option>
             </select>
+            <span v-else-if="gradingClasses && overview">{{ overview.task.class_name }}</span>
           </div>
         </div>
       </div>

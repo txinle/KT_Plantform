@@ -51,9 +51,9 @@ def experiment_activity_map(experiments, *, can_grade):
     tasks = list(ClassExperimentTask.objects.filter(experiment_id__in=experiments)
         .select_related("class_group", "release_snapshot")
         .prefetch_related(Prefetch("schedule_revisions",
-            queryset=ScheduleRevision.objects.order_by("-revision_no"),
+            queryset=ScheduleRevision.objects.filter(created_at__lte=now).order_by("-revision_no")[:1],
             to_attr="latest_schedule_revisions"), Prefetch('manual_closures',
-            queryset=TaskManualClosure.objects.order_by('-closed_at', '-pk'),
+            queryset=TaskManualClosure.objects.filter(closed_at__lte=now).order_by('-closed_at', '-pk')[:1],
             to_attr='current_manual_closures'))
         .order_by("experiment_id", "class_group__name", "pk"))
     manual_task_ids = [task.pk for task in tasks if task_uses_manual_short_answer_grading(task)]
