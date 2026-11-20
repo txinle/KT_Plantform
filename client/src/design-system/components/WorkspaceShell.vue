@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import AppHeader from './AppHeader.vue'
 import CourseSwitcher from './CourseSwitcher.vue'
 import InitialPasswordReminder from '@/app/InitialPasswordReminder.vue'
@@ -7,7 +7,7 @@ import SiteRegistrationFooter from '@/app/SiteRegistrationFooter.vue'
 import WorkspaceNavigation from './WorkspaceNavigation'
 import '../workspace.css'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   userName: string
   userMeta?: string | null
   csrfToken: string
@@ -23,6 +23,7 @@ withDefaults(defineProps<{
   passwordChangeUrl: null,
   initialPasswordReminderPending: false,
 })
+const sidebarMeta = computed(() => props.courseName ? props.courseMeta : props.userMeta)
 const secondary = ref<HTMLElement | null>(null)
 provide('workspace-secondary-nav', secondary)
 const mobile = ref(false)
@@ -88,7 +89,7 @@ onBeforeUnmount(() => {
       <button ref="closeButton" type="button" class="kt-workspace-close" data-workspace-close @click="close">关闭菜单</button>
       <div class="kt-workspace-context">
         <strong>{{ courseName || userName }}</strong>
-        <span v-if="courseMeta || userMeta">{{ courseMeta || userMeta }}</span>
+        <span v-if="sidebarMeta">{{ sidebarMeta }}</span>
       </div>
       <p class="kt-workspace-nav-label">{{ courseName ? '教学工作区' : '工作区' }}</p>
       <WorkspaceNavigation :register-secondary="element => secondary = element">

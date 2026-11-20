@@ -6,7 +6,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -36,6 +36,7 @@ from apps.question_bank.models import (
 from .models import RecordingCoverageAttempt, RecordingCoverageRun
 from .teaching.drilldown import (
     TransitionApplicability,
+    _rank_for_task,
     build_attempt_process_detail,
     build_question_detail,
     build_student_detail,
@@ -43,6 +44,27 @@ from .teaching.drilldown import (
 )
 from .teaching.process import ProcessCompleteness
 from .teaching.kc_time import summarize_question_timing
+
+
+class TaskRankingTests(SimpleTestCase):
+    def test_ranks_one_pass_of_scores_with_ties_partial_and_unrelated_grades(self):
+        roster = [
+            SimpleNamespace(student_id=i, student=SimpleNamespace(student_number=str(i)))
+            for i in range(1, 6)
+        ]
+        sessions = [
+            SimpleNamespace(pk=i, student_id=i, version_id=2 if i == 5 else 1)
+            for i in range(1, 6)
+        ]
+        attempts = [SimpleNamespace(session_id=i) for i in (1, 2, 3, 4, 4, 5)]
+        grades = (
+            (SimpleNamespace(score=score, max_score=2), attempt)
+            for score, attempt in zip([2, 2, 0, 1, None, 2], attempts, strict=True)
+        )
+        self.assertEqual(
+            _rank_for_task(SimpleNamespace(release_snapshot_id=1), roster, sessions, attempts, grades),
+            {1: 1, 2: 1, 3: 3},
+        )
 
 
 class QuestionTimingSummaryTests(TransactionTestCase):

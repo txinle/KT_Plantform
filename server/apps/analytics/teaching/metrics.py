@@ -188,11 +188,17 @@ def build_class_center_snapshot(
             (task.release_snapshot_id, task.class_snapshot_id): task for task in tasks
         }
         version_ids = {task.release_snapshot_id for task in tasks}
+        class_snapshot_ids = {task.class_snapshot_id for task in tasks}
+        participants = ExperimentVersionParticipantSnapshot.objects.filter(
+            version_id__in=version_ids, class_snapshot_id__in=class_snapshot_ids,
+        )
+        if experiment_id is None:
+            participants = participants.only("version_id", "class_snapshot_id", "student_id")
+        else:
+            participants = participants.select_related("student")
         participant_records = tuple(
             participant
-            for participant in ExperimentVersionParticipantSnapshot.objects.filter(
-                version_id__in=version_ids,
-            ).select_related("student")
+            for participant in participants
             if (participant.version_id, participant.class_snapshot_id) in task_by_pair
         )
         eligible_pairs = {
@@ -206,6 +212,7 @@ def build_class_center_snapshot(
             session
             for session in ExperimentSession.objects.filter(
                 version_id__in=version_ids,
+                class_snapshot_id__in=class_snapshot_ids,
                 student_id__in=eligible_student_ids,
             ).only("id", "version_id", "student_id", "class_snapshot_id", "status")
             if (session.version_id, session.class_snapshot_id) in task_by_pair

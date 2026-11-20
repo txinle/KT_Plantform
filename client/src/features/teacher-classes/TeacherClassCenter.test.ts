@@ -1,8 +1,8 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { ref } from 'vue'
+import { reactive, ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const route = { params: { courseId: '7', classId: '11' }, query: {} as Record<string, string> }
+const route = reactive({ params: { courseId: '7', classId: '11' }, query: {} as Record<string, string> })
 const mocks = vi.hoisted(() => ({
   operationId: '',
   api: { center: vi.fn() },
@@ -98,6 +98,7 @@ function centerPayload() {
 describe('TeacherClassCenter', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.push.mockImplementation(async target => { if (target.query) route.query = target.query })
     sessionStorage.clear()
     mocks.operationId = ''
     mocks.deletion.registerOperation.mockImplementation(async (...args: [number, { operation_id: string }]) => {
@@ -134,6 +135,38 @@ describe('TeacherClassCenter', () => {
     expect(wrapper.text()).toContain('暂无可计算的正确率')
     const manage = wrapper.get('a[href*="section=manage"]')
     expect(manage.text()).toContain('班级管理')
+  })
+
+  it('shows the loaded tabs immediately and shares a pending refresh across tab switches', async () => {
+    const wrapper = mount(TeacherClassCenter)
+    await flushPromises()
+    let complete!: (value: ReturnType<typeof centerPayload>) => void
+    mocks.api.center.mockImplementationOnce(() => new Promise(resolve => { complete = resolve }))
+    const tab = (name: string) => wrapper.findAll('nav button').find(button => button.text() === name)!
+    await tab('学生表现').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('测试学生')
+    await tab('实验分析').trigger('click')
+    await flushPromises()
+    expect(mocks.api.center).toHaveBeenCalledTimes(2)
+    const fresh = centerPayload()
+    fresh.class_group.name = '更新后的班级名称'
+    complete(fresh)
+    await flushPromises()
+    expect(wrapper.get('h1').text()).toBe('更新后的班级名称')
+  })
+
+  it('loads the unfiltered first page when leaving a filtered student snapshot', async () => {
+    const payload = centerPayload()
+    payload.filters.query = '测试'
+    route.query = { section: 'students', q: '测试' }
+    mocks.api.center.mockResolvedValueOnce(payload)
+    const wrapper = mount(TeacherClassCenter)
+    await flushPromises()
+    await wrapper.findAll('nav button').find(button => button.text() === '概览')!.trigger('click')
+    await flushPromises()
+    expect(mocks.api.center).toHaveBeenCalledTimes(2)
+    expect(mocks.api.center.mock.lastCall?.[2].query).toBeUndefined()
   })
 
   it('renders server-projected student facts without calculating them in Vue', async () => {

@@ -7,6 +7,19 @@ import SidebarSection from './components/SidebarSection.vue'
 afterEach(() => { document.body.innerHTML = ''; vi.unstubAllGlobals() })
 
 describe('workspace navigation', () => {
+  it('uses account metadata only in the personal workspace', async () => {
+    const wrapper = mount(WorkspaceShell, {
+      props: { userName: '教师', userMeta: 'teacher-login', csrfToken: 'token', mainId: 'content' },
+      global: { stubs: { CourseSwitcher: true } },
+    })
+    const identity = () => wrapper.get('.kt-workspace-context').text()
+    expect(identity()).toContain('teacher-login')
+    await wrapper.setProps({ courseName: '课程' })
+    expect(identity()).toBe('课程')
+    await wrapper.setProps({ courseName: '英语', courseMeta: 'ENG · 秋季' })
+    expect(identity()).toContain('ENG · 秋季')
+  })
+
   it('adds one shared icon to each teacher course link without duplicating an existing icon', async () => {
     const wrapper = mount(WorkspaceShell, {
       props: { userName: '教师', csrfToken: 'token', mainId: 'content' },

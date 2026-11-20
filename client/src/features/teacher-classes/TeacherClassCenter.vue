@@ -33,6 +33,8 @@ const course = inject<Ref<components['schemas']['CourseContext'] | undefined>>(
 const center = ref<TeacherClassCenter>()
 const loading = ref(true)
 const error = ref('')
+let loadVersion = 0
+let refreshingTabs = false
 const search = ref(String(route.query.q || ''))
 const sort = ref(String(route.query.sort || 'student_number'))
 const status = ref(String(route.query.status || ''))
@@ -58,11 +60,14 @@ function statusTone(value: string) {
   return 'neutral' as const
 }
 
-async function load(overrides: { page?: number; experimentId?: number } = {}) {
-  loading.value = true
+async function load(overrides: { page?: number; experimentId?: number; keepVisible?: boolean } = {}) {
+  if (overrides.keepVisible && refreshingTabs) return
+  const version = ++loadVersion
+  refreshingTabs = overrides.keepVisible === true
+  loading.value = !refreshingTabs
   error.value = ''
   try {
-    center.value = await api.center(courseId, classId, {
+    const result = await api.center(courseId, classId, {
       section: activeSection.value,
       page: overrides.page ?? Number(route.query.page || 1),
       query: activeSection.value === 'students' ? search.value.trim() : undefined,
@@ -70,20 +75,31 @@ async function load(overrides: { page?: number; experimentId?: number } = {}) {
       status: activeSection.value === 'students' ? status.value : undefined,
       experimentId: overrides.experimentId ?? (route.query.experiment_id ? Number(route.query.experiment_id) : undefined),
     })
-    selectedExperiment.value = String(center.value.filters.experiment_id || '')
+    if (version !== loadVersion) return
+    center.value = result
+    selectedExperiment.value = String(result.filters.experiment_id || '')
   } catch (caught) {
+    if (version !== loadVersion) return
+    center.value = undefined
     error.value = caught instanceof Error ? caught.message : '班级教学事实加载失败。'
   } finally {
-    loading.value = false
+    if (version === loadVersion) {
+      loading.value = false
+      refreshingTabs = false
+    }
   }
 }
 
 async function navigateSection(section: Section) {
+  const current = center.value
+  const keepVisible = !loading.value && current?.class_group.id === Number(route.params.classId)
+    && current.students.page.number === 1 && !current.filters.query && !current.filters.status
+    && current.filters.sort === 'student_number' && !current.filters.experiment_id
   search.value = ''
   status.value = ''
   sort.value = 'student_number'
   await router.push({ query: section === 'overview' ? {} : { section } })
-  await load({ page: 1 })
+  await load({ page: 1, keepVisible })
 }
 
 async function applyStudentFilters() {

@@ -15,7 +15,7 @@ from apps.assessment.models import (
     StudentQuestionAssignment,
     SubmissionEvent,
 )
-from apps.experiments.models import Experiment, ExperimentQuestion
+from apps.experiments.models import Experiment, ExperimentQuestion, ExperimentVersionParticipantSnapshot
 from apps.experiments.presentation_instances import get_or_create_default_item_instance
 from apps.experiments.services import (
     _publish_legacy_experiment as publish_experiment,
@@ -404,5 +404,11 @@ class ClassCenterMetricContractTests(TransactionTestCase):
         with CaptureQueriesContext(connection) as captured:
             build_class_center_snapshot(self.class_group)
 
+        for model in (ExperimentVersionParticipantSnapshot, ExperimentSession):
+            source = f'FROM "{model._meta.db_table}"'
+            sql, = (entry["sql"] for entry in captured if source in entry["sql"])
+            self.assertIn('"class_snapshot_id"', sql.split(" WHERE ", 1)[1])
+            if model is ExperimentVersionParticipantSnapshot:
+                self.assertNotIn(f'JOIN "{User._meta.db_table}"', sql)
         budget = 10 if connection.vendor == "postgresql" else 9
         self.assertLessEqual(len(captured), budget)

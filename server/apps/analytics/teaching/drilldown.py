@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import replace
 from dataclasses import dataclass
 from datetime import datetime
@@ -873,21 +873,24 @@ def _class_student_fact_rows(class_group, tasks):
         attempt
         for attempt in Attempt.objects.filter(session_id__in=session_by_id)
         .select_related("assignment__snapshot")
+        .only(
+            "session_id", "first_to_submit_duration_ms", "assignment__snapshot__version_id",
+            "assignment__snapshot__primary_kc", "assignment__snapshot__all_kcs",
+        )
         if attempt.assignment.snapshot.version_id
         == session_by_id[attempt.session_id].version_id
     )
     attempt_by_id = {attempt.pk: attempt for attempt in attempts}
-    submissions = tuple(
-        SubmissionEvent.objects.filter(attempt_id__in=attempt_by_id)
+    submitted_attempt_ids = set(
+        SubmissionEvent.objects.filter(attempt_id__in=attempt_by_id).values_list("attempt_id", flat=True)
     )
-    submitted_attempt_ids = {submission.attempt_id for submission in submissions}
     grades = tuple(
         grade
         for grade in GradeRecord.objects.filter(
             submission__attempt_id__in=attempt_by_id,
             status=GradeRecord.Status.COMPLETED,
             validity_status=GradeRecord.ValidityStatus.EFFECTIVE,
-        ).select_related("submission")
+        ).select_related("submission").only("is_correct", "score", "max_score", "submission__attempt_id")
         if grade.submission.attempt_id in attempt_by_id
     )
     grade_attempt_pairs = tuple(
@@ -914,6 +917,7 @@ def _rank_for_task(task, roster, sessions, attempts, grade_attempt_pairs):
         session_by_id[attempt.session_id].student_id for attempt in task_attempts
     )
     scores_by_student = {}
+    graded_counts = Counter()
     for grade, attempt in grade_attempt_pairs:
         session = session_by_id[attempt.session_id]
         if (
@@ -929,23 +933,16 @@ def _rank_for_task(task, roster, sessions, attempts, grade_attempt_pairs):
             score + grade.score,
             maximum + grade.max_score,
         )
+        graded_counts[session.student_id] += 1
     values = []
     for enrollment in roster:
         student_id = enrollment.student_id
         score, maximum = scores_by_student.get(
             student_id, (Decimal("0"), Decimal("0"))
         )
-        graded_count = sum(
-            1
-            for grade, attempt in grade_attempt_pairs
-            if session_by_id[attempt.session_id].student_id == student_id
-            and session_by_id[attempt.session_id].version_id == task.release_snapshot_id
-            and grade.score is not None
-            and grade.max_score is not None
-        )
         comparable = (
             attempts_by_student[student_id] > 0
-            and graded_count == attempts_by_student[student_id]
+            and graded_counts[student_id] == attempts_by_student[student_id]
             and maximum > 0
         )
         values.append(
@@ -976,46 +973,37 @@ def build_student_detail(class_group, *, student_id):
             raise LookupError("Student is not a current class member.")
         student = enrollment.student
         session_by_id = {session.pk: session for session in sessions}
-        sessions_by_student = {
-            current_id: tuple(
-                session for session in sessions if session.student_id == current_id
-            )
-            for current_id in {item.student_id for item in roster}
+        completed_versions = {
+            session.version_id for session in sessions
+            if session.student_id == student_id and session.status == ExperimentSession.Status.COMPLETED
         }
-        grades_by_student = {
-            current_id: tuple(
-                (grade, attempt)
-                for grade, attempt in grade_attempt_pairs
-                if session_by_id[attempt.session_id].student_id == current_id
-            )
-            for current_id in {item.student_id for item in roster}
-        }
+        grades_by_student = defaultdict(list)
+        grades_by_version = defaultdict(list)
+        grades_by_version_student = defaultdict(list)
+        for grade, attempt in grade_attempt_pairs:
+            session = session_by_id[attempt.session_id]
+            pair = (grade, attempt)
+            grades_by_student[session.student_id].append(pair)
+            grades_by_version[session.version_id].append(pair)
+            grades_by_version_student[session.version_id, session.student_id].append(pair)
+        attempts_by_version = defaultdict(list)
+        for attempt in attempts:
+            attempts_by_version[session_by_id[attempt.session_id].version_id].append(attempt)
 
         experiment_rows = []
         trend_rows = []
         for task in tasks:
-            target_pairs = tuple(
-                (grade, attempt)
-                for grade, attempt in grades_by_student[student_id]
-                if session_by_id[attempt.session_id].version_id
-                == task.release_snapshot_id
-            )
+            version_id = task.release_snapshot_id
+            target_pairs = grades_by_version_student[version_id, student_id]
             target_attempts = tuple(
                 attempt
-                for attempt in attempts
+                for attempt in attempts_by_version[version_id]
                 if session_by_id[attempt.session_id].student_id == student_id
-                and session_by_id[attempt.session_id].version_id
-                == task.release_snapshot_id
             )
             target_correct = _correct_metric(generated_at, target_pairs)
             class_ratios = []
             for current in roster:
-                current_pairs = tuple(
-                    (grade, attempt)
-                    for grade, attempt in grades_by_student[current.student_id]
-                    if session_by_id[attempt.session_id].version_id
-                    == task.release_snapshot_id
-                )
+                current_pairs = grades_by_version_student[version_id, current.student_id]
                 ratio = _correct_metric(generated_at, current_pairs).ratio
                 if ratio is not None:
                     class_ratios.append(ratio)
@@ -1027,7 +1015,7 @@ def build_student_detail(class_group, *, student_id):
                 sample_size=len(class_ratios),
             )
             ranks = _rank_for_task(
-                task, roster, sessions, attempts, grade_attempt_pairs
+                task, roster, sessions, attempts_by_version[version_id], grades_by_version[version_id]
             )
             durations = tuple(
                 Decimal(attempt.first_to_submit_duration_ms)
@@ -1041,11 +1029,7 @@ def build_student_detail(class_group, *, student_id):
                     generated_at=generated_at,
                     experiment_id=task.experiment_id,
                     name=task.experiment_name,
-                    completed=any(
-                        session.version_id == task.release_snapshot_id
-                        and session.status == ExperimentSession.Status.COMPLETED
-                        for session in sessions_by_student[student_id]
-                    ),
+                    completed=version_id in completed_versions,
                     correct_rate=target_correct,
                     score_rate=_score_metric(generated_at, target_pairs),
                     rank=ranks.get(student_id),
@@ -1135,11 +1119,6 @@ def build_student_detail(class_group, *, student_id):
             version_id
             for version_id, eligible_student_id in eligible_pairs
             if eligible_student_id == student_id
-        }
-        completed_versions = {
-            session.version_id
-            for session in sessions_by_student[student_id]
-            if session.status == ExperimentSession.Status.COMPLETED
         }
         chronological_trends = tuple(reversed(trend_rows))
         if len(chronological_trends) >= 2:
