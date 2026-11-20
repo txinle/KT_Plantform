@@ -132,6 +132,24 @@ class ImmutableArtifactQuerySet(models.QuerySet):
         raise AppendOnlyEventError("Event schema artifacts are immutable.")
 
     def bulk_create(self, objs, **kwargs):
+        if self.model is ResponseInputObservation and _RESPONSE_OBSERVATION_APPEND_ALLOWED.get():
+            rows = list(objs)
+            if kwargs.get('ignore_conflicts') or kwargs.get('update_conflicts') or any(
+                    type(row) is not ResponseInputObservation or not row._state.adding for row in rows):
+                raise AppendOnlyEventError('Input observation batches must append new validated rows.')
+            # Field validation normally fetches each FK separately. Check the same
+            # parent IDs in sets, including the required attempt, before inserting.
+            for row in rows:
+                row.full_clean(exclude=['attempt', 'source_event'], validate_unique=False, validate_constraints=False)
+            for field in ('attempt', 'source_event'):
+                fk = self.model._meta.get_field(field)
+                ids = {fk.target_field.to_python(getattr(row, fk.attname)) for row in rows}
+                if fk.null:
+                    ids.discard(None)
+                parents = fk.remote_field.model._base_manager.using(self.db).filter(pk__in=ids)
+                if ids != set(parents.values_list('pk', flat=True)):
+                    raise ValidationError({field: 'Missing input observation parent.'})
+            return super().bulk_create(rows, **kwargs)
         if self.model is ResponseSnapshot and _RESPONSE_SNAPSHOT_APPEND_ALLOWED.get():
             rows = list(objs)
             if kwargs.get('ignore_conflicts') or kwargs.get('update_conflicts') or any(

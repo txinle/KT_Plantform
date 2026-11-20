@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 
 from .models import ResponseInputObservation, _response_observation_append_scope
 
@@ -42,7 +43,67 @@ def stable_input_observation(*, is_composing=False, input_method="unknown", text
     return payload
 
 
+def _check_replay(existing, incoming):
+    # Legacy records may lack a source event. Preserve the original link and
+    # compare exactly the stored stable-input material, including null boundaries.
+    fields = ('client_monotonic_ms', 'batch_start_client_monotonic_ms',
+              'batch_end_client_monotonic_ms', 'edit_operation', 'content_hash_before',
+              'content_hash_after', 'content_length_before', 'content_length_after',
+              'input_method', 'is_ime')
+    if any(getattr(existing, name) != getattr(incoming, name) for name in fields):
+        raise ValueError("Input observation sequence conflicts with existing observation.")
+    return existing
+
+
+def _append_input_observations(rows, *, bulk):
+    """Append after parent events flush, inside the event batch's atomic retry."""
+    if not rows:
+        return
+    if not bulk:
+        for row in rows:
+            _append_one_input_observation(row)
+        return
+
+    sequences = {}
+    for row in rows:
+        sequences.setdefault((row.attempt_id, row.client_instance_id), []).append(row.client_sequence_no)
+    keys = Q(pk__in=[])
+    for (attempt_id, client_id), numbers in sequences.items():
+        keys |= Q(attempt_id=attempt_id, client_instance_id=client_id, client_sequence_no__in=numbers)
+    existing = {(row.attempt_id, row.client_instance_id, row.client_sequence_no): row
+                for row in ResponseInputObservation.objects.filter(keys)}
+    new = []
+    for row in rows:
+        key = (row.attempt_id, row.client_instance_id, row.client_sequence_no)
+        if key in existing:
+            _check_replay(existing[key], row)
+        else:
+            new.append(row)
+            existing[key] = row
+    if new:
+        with _response_observation_append_scope():
+            ResponseInputObservation.objects.bulk_create(new)
+
+
 @transaction.atomic
+def _append_one_input_observation(row):
+    by_key = ResponseInputObservation.objects.filter(
+        attempt_id=row.attempt_id, client_instance_id=row.client_instance_id,
+        client_sequence_no=row.client_sequence_no)
+    existing = by_key.first()
+    if existing is not None:
+        return _check_replay(existing, row)
+    try:
+        with transaction.atomic(), _response_observation_append_scope():
+            row.save(force_insert=True)
+    except IntegrityError:
+        existing = by_key.first()
+        if existing is None:
+            raise
+        return _check_replay(existing, row)
+    return row
+
+
 def record_stable_input_observation(
     *,
     attempt,
@@ -61,7 +122,7 @@ def record_stable_input_observation(
     source_event=None,
 ):
     """Append one stable-input observation without accepting response text."""
-    values = dict(
+    return _append_one_input_observation(ResponseInputObservation(
         attempt=attempt,
         source_event=source_event,
         client_instance_id=client_instance_id,
@@ -76,35 +137,4 @@ def record_stable_input_observation(
         content_length_after=content_length_after,
         input_method=input_method,
         is_ime=is_ime,
-    )
-    existing = ResponseInputObservation.objects.filter(
-        attempt=attempt,
-        client_instance_id=client_instance_id,
-        client_sequence_no=client_sequence_no,
-    ).first()
-    if existing is not None:
-        comparable = {
-            key: getattr(existing, key)
-            for key in values
-            if key not in {"attempt", "source_event"}
-        }
-        incoming = {
-            key: value
-            for key, value in values.items()
-            if key not in {"attempt", "source_event"}
-        }
-        if comparable != incoming:
-            raise ValueError("Input observation sequence conflicts with existing observation.")
-        return existing
-    try:
-        with _response_observation_append_scope():
-            return ResponseInputObservation.objects.create(**values)
-    except IntegrityError:
-        existing = ResponseInputObservation.objects.filter(
-            attempt=attempt,
-            client_instance_id=client_instance_id,
-            client_sequence_no=client_sequence_no,
-        ).first()
-        if existing is None:
-            raise
-        return existing
+    ))

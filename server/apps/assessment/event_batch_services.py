@@ -18,8 +18,8 @@ from .event_schema_registry import (
     validate_event_payload,
 )
 from .event_services import EventIdempotencyConflict, append_assessment_event
-from .response_input_services import record_stable_input_observation
-from .models import AssessmentEvent, Attempt, ClientTimeSync, ExperimentSession
+from .response_input_services import _append_input_observations
+from .models import AssessmentEvent, Attempt, ClientTimeSync, ExperimentSession, ResponseInputObservation
 
 
 MAX_BATCH_EVENTS = 100
@@ -519,10 +519,9 @@ def _append_parsed_events(events, sessions, client_instance_id, *, bulk):
                 }
             )
             if parsed.event_type == "text_edit_observed":
-                observations.append((parsed, event))
+                observations.append(_text_observation(parsed, event, client_instance_id))
         _flush_capture_writes(batch_context)
-        for parsed, event in observations:
-            _record_text_observation(parsed, event, client_instance_id)
+        _append_input_observations(observations, bulk=bulk)
         changed_sessions = [session for session_id, session in sessions.items()
                             if session.next_ingest_sequence_no != next_sequences[session_id]]
         for session in changed_sessions:
@@ -539,9 +538,9 @@ def _append_parsed_events(events, sessions, client_instance_id, *, bulk):
     return acknowledgements
 
 
-def _record_text_observation(parsed, event, client_instance_id):
+def _text_observation(parsed, event, client_instance_id):
     observation = parsed.payload
-    record_stable_input_observation(
+    return ResponseInputObservation(
         attempt=parsed.attempt,
         source_event=event,
         client_instance_id=client_instance_id,
