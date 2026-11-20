@@ -132,6 +132,54 @@ class CaptureBundleTests(TestCase):
         return {'target_event_id': bundle['events'][0]['event_id'], 'expected_version': 0,
                 'capture_bundle': bundle, 'capture_operation_id': str(uuid.uuid4())}
 
+    def test_draft_endpoint_reuses_owned_session_id(self):
+        from .capture_bundle_services import _locked_attempt
+        attempt, bundle = self.capture()
+        document = self.draft_document(bundle)
+        with CaptureQueriesContext(connection) as first:
+            saved = self.post('assessment_api:save_draft', document, attempt)
+        receipt = self.assert_receipt(saved, bundle)
+        redundant = [row['sql'] for row in first
+                     if row['sql'].startswith('SELECT "assessment_attempt"."session_id"')
+                     and 'JOIN "assessment_experimentsession"' in row['sql']]
+        self.assertEqual(redundant, [], f'{len(first)} queries for the initial draft')
+        with CaptureQueriesContext(connection) as fast:
+            replay = self.post('assessment_api:save_draft', document, attempt)
+        self.assertEqual(self.assert_receipt(replay, bundle), receipt)
+        # Compare the same receipt replay with service-side session discovery.
+        def resolve_again(student, attempt_id, **kwargs):
+            return _locked_attempt(student, attempt_id)
+        with patch('apps.assessment.capture_bundle_services._locked_attempt', resolve_again):
+            with CaptureQueriesContext(connection) as fallback:
+                replay = self.post('assessment_api:save_draft', document, attempt)
+        self.assertEqual(self.assert_receipt(replay, bundle), receipt)
+        self.assertEqual(len(fast) + 1, len(fallback))
+
+    def test_draft_rechecks_student_and_attempt_under_supplied_session_lock(self):
+        from apps.accounts.models import User
+        from .capture_bundle_services import save_draft_capture_bundle
+        from .event_batch_services import ProcessRequestError
+        from .models import CaptureMutationReceipt
+        from .test_support import accept_research_consent
+        attempt, bundle = self.capture()
+        document = self.draft_document(bundle)
+        other_session, _ = self.mixed_session_capture()
+        other_student = User.objects.create_user(username='foreign-draft-owner', role=User.Role.STUDENT)
+        for student, session in ((self.student, other_session), (other_student, self.session)):
+            with self.subTest(student=student.pk, session=session.pk):
+                with self.assertRaises(ProcessRequestError) as rejected:
+                    save_draft_capture_bundle(student=student, attempt_id=attempt.pk,
+                        session_id=session.pk, document=document)
+                self.assertEqual(rejected.exception.code, 'invalid_bundle_link')
+        accept_research_consent(other_student)
+        self.client.force_login(other_student)
+        self.assertEqual(self.post('assessment_api:save_draft', document, attempt).status_code, 404)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.response_version, 0)
+        self.assertFalse(CaptureMutationReceipt.objects.filter(attempt=attempt).exists())
+        self.assertFalse(AssessmentEvent.objects.filter(pk=document['target_event_id']).exists())
+        self.assertFalse(ClientCaptureCheckpoint.objects.filter(pk=bundle['checkpoints'][0]['checkpoint_id']).exists())
+
     def tool_document(self, bundle):
         self.version.configuration = {'research_tools': {'doubt_enabled': True}}
         self.version.save(update_fields=['configuration'])

@@ -39,14 +39,18 @@ def _locked_session(student, session_id):
     return session
 
 
-def _locked_attempt(student, attempt_id):
-    session_id = Attempt.objects.filter(pk=attempt_id, session__student=student).values_list('session_id', flat=True).first()
+def _locked_attempt(student, attempt_id, *, session_id=None):
     if session_id is None:
-        raise ProcessRequestError('invalid_bundle_link')
+        session_id = Attempt.objects.filter(pk=attempt_id, session__student=student).values_list('session_id', flat=True).first()
+        if session_id is None:
+            raise ProcessRequestError('invalid_bundle_link')
     session = _locked_session(student, session_id)
-    attempt = Attempt.objects.select_for_update(of=('self',)).select_related(
-        'assignment__snapshot', 'assignment__item_instance', 'current_response_snapshot',
-    ).get(pk=attempt_id, session=session)
+    try:
+        attempt = Attempt.objects.select_for_update(of=('self',)).select_related(
+            'assignment__snapshot', 'assignment__item_instance', 'current_response_snapshot',
+        ).get(pk=attempt_id, session=session)
+    except Attempt.DoesNotExist as error:
+        raise ProcessRequestError('invalid_bundle_link') from error
     attempt.session = session
     from .writer_lease_services import _bind_locked_attempt
     _bind_locked_attempt(attempt)
@@ -161,7 +165,7 @@ def ingest_capture_bundle(*, student, document, request_received_at=None):
     return {**receipt, 'committed': True}
 
 
-def save_draft_capture_bundle(*, student, attempt_id, document, request_received_at=None):
+def save_draft_capture_bundle(*, student, attempt_id, document, request_received_at=None, session_id=None):
     from .writer_lease_services import WriterLeaseConflict
     require_exact_mapping(document, allowed={'answer', 'client_occurred_at', 'target_event_id',
         'expected_version', 'writer_lease_token', 'writer_client_instance_id', 'capture_bundle', 'capture_operation_id', 'inline_confidence'},
@@ -172,7 +176,7 @@ def save_draft_capture_bundle(*, student, attempt_id, document, request_received
     request_received_at = request_received_at or timezone.now()
     rejection = None
     with coalesce_session_materializations(), transaction.atomic(durable=True):
-        attempt = _locked_attempt(student, attempt_id)
+        attempt = _locked_attempt(student, attempt_id, session_id=session_id)
         from .services import mutation_validation_context
         try:
             validation_context = mutation_validation_context(attempt.session, request_received_at)

@@ -51,7 +51,7 @@ def save_draft_api(request, attempt_id):
             if len(request.body) > MAX_BYTES:
                 raise ProcessRequestError('request_too_large', status=413)
             attempt, receipt = save_draft_capture_bundle(student=request.user, attempt_id=attempt_id,
-                document=data, request_received_at=request_received_at)
+                session_id=attempt.session_id, document=data, request_received_at=request_received_at)
             return JsonResponse(receipt)
         else:
             attempt = save_draft(
