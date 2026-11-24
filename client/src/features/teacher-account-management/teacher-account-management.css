@@ -150,6 +150,24 @@
   margin: 20px;
 }
 
+.kt-account-management-members-heading {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.kt-account-management-members-heading > span {
+  margin-inline-start: auto;
+}
+
+.kt-account-management-member-search {
+  flex: 0 1 19rem;
+  min-width: 0;
+}
+
+.kt-account-management-members > .kt-paginator {
+  margin: 0 20px 20px;
+}
+
 .kt-account-management-members .kt-table-scroll {
   border-top: 1px solid var(--kt-border);
 }
@@ -187,6 +205,11 @@ dialog.kt-account-management-dialog::backdrop {
   .kt-account-management-tabs button,
   .kt-account-management-actions > * {
     flex: 1 1 auto;
+  }
+
+  .kt-account-management-member-search {
+    flex-basis: 100%;
+    order: 1;
   }
 
   .kt-account-management-members .kt-table-scroll {

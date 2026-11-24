@@ -94,6 +94,44 @@ describe('TeacherClassManagement', () => {
     mocks.deletion.deleteClass.mockImplementation(async () => ({ deleted: true, cleanup_pending: false, cleanup_id: null, operation_id: mocks.operationId }))
   })
 
+  it('pages the members and searches the full class by name or student number', async () => {
+    const data = payload()
+    const example = data.enrollments[0]!
+    data.enrollments = Array.from({ length: 21 }, (_, index) => ({
+      ...example,
+      enrollment_id: index + 100,
+      student: {
+        ...example.student,
+        id: index + 200,
+        student_number: `KT${1000 + index}`,
+        display_name: index === 20 ? '周同学' : `测试学生 ${index + 1}`,
+      },
+    }))
+    mocks.api.management.mockResolvedValueOnce(data)
+    const wrapper = mount(TeacherClassManagement)
+    await flushPromises()
+    const members = wrapper.get('section[aria-labelledby="class-member-title"]')
+    const rows = () => members.findAll('tbody tr')
+
+    expect(rows()).toHaveLength(10)
+    expect(members.get('nav[aria-label="分页"]').text()).toContain('第 1/3 页')
+    await members.get('[data-next]').trigger('click')
+    expect(rows()[0]?.text()).toContain('KT1010')
+
+    const search = members.get('input[type="search"][aria-label="搜索学生"]')
+    await search.setValue(' 周 ')
+    expect(rows()).toHaveLength(1)
+    expect(rows()[0]?.text()).toContain('KT1020')
+    await search.setValue('kt1013')
+    expect(rows()).toHaveLength(1)
+    expect(rows()[0]?.text()).toContain('KT1013')
+    await search.setValue('无结果')
+    expect(members.text()).toContain('没有匹配的学生')
+    await search.setValue('')
+    expect(rows()).toHaveLength(10)
+    expect(rows()[0]?.text()).toContain('KT1000')
+  })
+
   it('uses the server-provided class state and submits manual enrollment through the API', async () => {
     const wrapper = mount(TeacherClassManagement)
     await flushPromises()
@@ -361,18 +399,35 @@ describe('TeacherClassManagement', () => {
     expect(mocks.api.management).toHaveBeenCalledTimes(2)
   })
 
-  it('resets the global password without accepting a custom password', async () => {
+  it('requires confirmation in a modal before resetting the global password', async () => {
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+    HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
     mocks.api.resetCourseStudentPassword.mockResolvedValue({})
     const wrapper = mount(TeacherClassManagement)
     await flushPromises()
 
-    await wrapper.get('[data-course-reset-password]').trigger('click')
-    expect(wrapper.text()).toContain('S + 当前学号（SS001）')
-    expect(wrapper.text()).toContain('现有登录会话将全部失效')
-    expect(wrapper.find('[aria-labelledby="reset-password-title"] input[type="password"]').exists()).toBe(false)
-    await wrapper.get('[data-course-reset-password-confirm]').trigger('click')
+    const openReset = async () => {
+      await wrapper.get('[data-course-reset-password]').trigger('click')
+      await flushPromises()
+      return wrapper.get('dialog[open][aria-modal="true"]')
+    }
+    const modal = await openReset()
+    expect(modal.text()).toContain('S + 当前学号（SS001）')
+    expect(modal.text()).toContain('现有登录会话将全部失效')
+    expect(modal.find('input[type="password"]').exists()).toBe(false)
+    await modal.trigger('cancel')
+    expect(wrapper.find('dialog[open]').exists()).toBe(false)
+    expect(mocks.api.resetCourseStudentPassword).not.toHaveBeenCalled()
+
+    mocks.api.resetCourseStudentPassword.mockRejectedValueOnce(new Error('密码服务暂不可用。'))
+    const confirmation = (await openReset()).get('[data-course-reset-password-confirm]')
+    await confirmation.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('dialog[open] [role="alert"]').text()).toContain('密码服务暂不可用。')
+    await confirmation.trigger('click')
     await flushPromises()
 
     expect(mocks.api.resetCourseStudentPassword).toHaveBeenCalledWith(7, 11, 23)
+    expect(wrapper.find('dialog[open]').exists()).toBe(false)
   })
 })

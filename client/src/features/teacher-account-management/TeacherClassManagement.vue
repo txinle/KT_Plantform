@@ -4,7 +4,9 @@ import { useRoute, useRouter } from 'vue-router'
 
 import Alert from '@/design-system/components/Alert.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
+import ModalDialog from '@/design-system/components/ModalDialog.vue'
 import PageHeader from '@/design-system/components/PageHeader.vue'
+import Paginator from '@/design-system/components/Paginator.vue'
 import StatusBadge from '@/design-system/components/StatusBadge.vue'
 import { ApiError } from '@/api/client'
 import DeletionDialog from '@/features/teacher-deletion/DeletionDialog.vue'
@@ -57,8 +59,12 @@ const importPreview = ref<CourseStudentImportPreview>()
 const importJob = ref<StudentImportJob>()
 const importFile = ref<File>()
 const moveTargets = reactive<Record<number, string>>({})
+const memberSearch = ref('')
+const memberPage = ref(1)
+const memberPageSize = 10
 const removeCandidate = ref<AccountStudent>()
 const resetCandidate = ref<AccountStudent>()
+const resetError = ref('')
 const editCandidate = ref<IdentityEditCandidate>()
 const nameConfirmation = ref<StudentNameConfirmation>()
 const nameConfirmationDialog = ref<HTMLDialogElement>()
@@ -68,6 +74,24 @@ const importJobStorageKey = `course-student-import-job:${courseId}:${classId}`
 let importPollTimer: number | undefined
 
 const currentClass = computed(() => management.value?.class_group)
+const members = computed(() => management.value?.enrollments ?? [])
+const memberQuery = computed(() => memberSearch.value.trim().toLowerCase())
+const matchingMembers = computed(() => {
+  const query = memberQuery.value
+  if (!query) return members.value
+  return members.value.filter(({ student }) => (
+    student.student_number.toLowerCase().includes(query)
+    || student.display_name.toLowerCase().includes(query)
+  ))
+})
+const memberPages = computed(() => Math.max(1, Math.ceil(matchingMembers.value.length / memberPageSize)))
+const visibleMembers = computed(() => {
+  const start = (memberPage.value - 1) * memberPageSize
+  return matchingMembers.value.slice(start, start + memberPageSize)
+})
+watch(memberQuery, () => { memberPage.value = 1 })
+watch(memberPages, (pages) => { memberPage.value = Math.min(memberPage.value, pages) })
+
 const moveTargetClasses = computed(() => {
   if (!management.value) return []
   return management.value.target_classes.filter(
@@ -429,10 +453,20 @@ async function removeStudent() {
   }
 }
 
+function openPasswordReset(student: AccountStudent) {
+  resetError.value = ''
+  resetCandidate.value = student
+}
+
+function closePasswordReset() {
+  if (!submitting.value) resetCandidate.value = undefined
+}
+
 async function resetPassword() {
   if (!resetCandidate.value) return
   submitting.value = true
   error.value = ''
+  resetError.value = ''
   success.value = ''
   try {
     await api.resetCourseStudentPassword(courseId, classId, resetCandidate.value.id)
@@ -440,7 +474,7 @@ async function resetPassword() {
     resetCandidate.value = undefined
     success.value = `${name} 的全局登录密码已重置。`
   } catch (caught) {
-    error.value = message(caught, '密码重置失败。')
+    resetError.value = message(caught, '密码重置失败。')
   } finally {
     submitting.value = false
   }
@@ -543,9 +577,43 @@ onUnmounted(clearImportPoll)
       </section>
 
       <section v-if="workflow === 'manage'" class="kt-card kt-account-management-members" aria-labelledby="class-member-title">
-        <div class="kt-section-heading"><h2 id="class-member-title">当前课程成员</h2><span>{{ management.enrollments.length }} 人</span></div>
-        <EmptyState v-if="!management.enrollments.length" title="当前班级没有学生"><p>可通过手动添加、Excel/CSV 导入或复制名单建立课程成员关系。</p></EmptyState>
-        <div v-else class="kt-table-scroll"><table class="kt-table"><thead><tr><th>学号</th><th>姓名</th><th>转入班级</th><th>账号操作</th><th>课程成员操作</th></tr></thead><tbody><tr v-for="enrollment in management.enrollments" :key="enrollment.enrollment_id"><td>{{ enrollment.student.student_number }}</td><td>{{ enrollment.student.display_name }}</td><td><div class="kt-account-management-inline"><select v-model="moveTargets[enrollment.student.id]" :disabled="submitting || !management.capabilities.can_move_students"><option value="">选择班级</option><option v-for="target in moveTargetClasses" :key="target.id" :value="target.id">{{ target.display_name }}</option></select><button class="kt-button kt-button--secondary" type="button" :disabled="submitting || !management.capabilities.can_move_students" @click="moveStudent(enrollment.student)">转班</button></div></td><td><div class="kt-account-management-inline"><button class="kt-button kt-button--secondary" data-edit-student-identity type="button" :disabled="submitting || !management.capabilities.can_edit_students" @click="beginIdentityEdit(enrollment)">编辑信息</button><button class="kt-button kt-button--secondary" data-course-reset-password type="button" :disabled="submitting || !management.capabilities.can_reset_passwords" @click="resetCandidate = enrollment.student">重置密码</button></div></td><td><button class="kt-button kt-button--danger" type="button" :disabled="submitting || !management.capabilities.can_remove_students" @click="removeCandidate = enrollment.student">移出课程</button></td></tr></tbody></table></div>
+        <div class="kt-section-heading kt-account-management-members-heading">
+          <h2 id="class-member-title">当前课程成员</h2>
+          <input v-if="members.length" v-model="memberSearch" class="kt-account-management-member-search" type="search" aria-label="搜索学生" placeholder="姓名或学号">
+          <span role="status">{{ memberQuery ? `找到 ${matchingMembers.length} 人，共 ${members.length} 人` : `${members.length} 人` }}</span>
+        </div>
+        <EmptyState v-if="!members.length" title="当前班级没有学生"><p>可通过手动添加、Excel/CSV 导入或复制名单建立课程成员关系。</p></EmptyState>
+        <EmptyState v-else-if="!matchingMembers.length" title="没有匹配的学生"><p>请调整姓名或学号后重试。</p></EmptyState>
+        <template v-else>
+          <div class="kt-table-scroll">
+            <table class="kt-table">
+              <thead><tr><th>学号</th><th>姓名</th><th>转入班级</th><th>账号操作</th><th>课程成员操作</th></tr></thead>
+              <tbody>
+                <tr v-for="enrollment in visibleMembers" :key="enrollment.enrollment_id">
+                  <td>{{ enrollment.student.student_number }}</td>
+                  <td>{{ enrollment.student.display_name }}</td>
+                  <td>
+                    <div class="kt-account-management-inline">
+                      <select v-model="moveTargets[enrollment.student.id]" :disabled="submitting || !management.capabilities.can_move_students">
+                        <option value="">选择班级</option>
+                        <option v-for="target in moveTargetClasses" :key="target.id" :value="target.id">{{ target.display_name }}</option>
+                      </select>
+                      <button class="kt-button kt-button--secondary" type="button" :disabled="submitting || !management.capabilities.can_move_students" @click="moveStudent(enrollment.student)">转班</button>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="kt-account-management-inline">
+                      <button class="kt-button kt-button--secondary" data-edit-student-identity type="button" :disabled="submitting || !management.capabilities.can_edit_students" @click="beginIdentityEdit(enrollment)">编辑信息</button>
+                      <button class="kt-button kt-button--secondary" data-course-reset-password type="button" :disabled="submitting || !management.capabilities.can_reset_passwords" @click="openPasswordReset(enrollment.student)">重置密码</button>
+                    </div>
+                  </td>
+                  <td><button class="kt-button kt-button--danger" type="button" :disabled="submitting || !management.capabilities.can_remove_students" @click="removeCandidate = enrollment.student">移出课程</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <Paginator :page="memberPage" :total-pages="memberPages" @navigate="memberPage = $event" />
+        </template>
       </section>
 
       <section v-if="editCandidate" class="kt-card kt-account-management-confirm" aria-labelledby="edit-student-identity-title">
@@ -566,11 +634,14 @@ onUnmounted(clearImportPoll)
         <div class="kt-account-management-actions"><button class="kt-button" data-confirm-student-name type="button" :disabled="submitting" @click="confirmStudentName">确认更正并加入</button><button class="kt-button kt-button--secondary" data-cancel-student-name type="button" :disabled="submitting" @click="cancelStudentNameConfirmation">取消</button></div>
       </dialog>
 
-      <section v-if="resetCandidate" class="kt-card kt-account-management-confirm" aria-labelledby="reset-password-title">
-        <h2 id="reset-password-title">重置 {{ resetCandidate.display_name }} 的全局登录密码</h2>
-        <p>重置后密码将变为 S + 当前学号（S{{ resetCandidate.student_number }}），该学生现有登录会话将全部失效。</p>
-        <div class="kt-account-management-actions"><button class="kt-button" data-course-reset-password-confirm type="button" :disabled="submitting" @click="resetPassword">确认重置</button><button class="kt-button kt-button--secondary" type="button" :disabled="submitting" @click="resetCandidate = undefined">取消</button></div>
-      </section>
+      <ModalDialog v-if="resetCandidate" open :title="`重置 ${resetCandidate.display_name} 的全局登录密码`" @close="closePasswordReset">
+        <p class="kt-picker-note">重置后密码将变为 S + 当前学号（S{{ resetCandidate.student_number }}），该学生现有登录会话将全部失效。</p>
+        <Alert v-if="resetError" tone="danger">{{ resetError }}</Alert>
+        <template #footer>
+          <button class="kt-button kt-button--secondary" type="button" :disabled="submitting" @click="closePasswordReset">取消</button>
+          <button class="kt-button" data-course-reset-password-confirm type="button" :disabled="submitting" @click="resetPassword">{{ submitting ? '正在重置…' : '确认重置' }}</button>
+        </template>
+      </ModalDialog>
 
       <section v-if="removeCandidate" class="kt-card kt-account-management-confirm" aria-labelledby="remove-student-title">
         <h2 id="remove-student-title">移出 {{ removeCandidate.display_name }}</h2>
