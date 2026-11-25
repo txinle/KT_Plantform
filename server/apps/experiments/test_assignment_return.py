@@ -128,6 +128,31 @@ class AssignmentReturnTests(StudentApiFixtureMixin, TestCase):
         self.assertTrue(ExperimentSession.objects.filter(
             participant_snapshot=participant, status=ExperimentSession.Status.PREPARED).exists())
 
+    def test_large_failed_history_is_drained_before_the_single_atomic_reset(self):
+        from apps.analytics.models import ResearchSessionMaterialization as Materialization
+
+        history = Materialization.objects.bulk_create([
+            Materialization(session=self.session, status='failed') for _ in range(300)])
+        token = self.preview()['confirmation_token']
+        def send(token):
+            return self.client.post(self.url, {'confirmation_token': token, 'allow_batches': True},
+                                    content_type='application/json')
+        first = send(token)
+        self.assertEqual(first.status_code, 202, first.content)
+        self.assertTrue(SubmissionEvent.objects.filter(attempt=self.attempt).exists())
+        self.assertFalse(AuditLog.objects.filter(action='experiment.student_session_reset').exists())
+        response = first
+        for _ in range(len(history)):
+            if response.status_code != 202:
+                break
+            result = domain_payload(response)
+            self.assertGreater(result['processed'], 0)
+            response = send(result['confirmation_token'])
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(domain_payload(response)['status'], 'not_started')
+        self.assertEqual(domain_payload(send(token)), domain_payload(response))
+        self.assertFalse(Materialization.objects.filter(session_id=self.session.pk).exists())
+
     def test_rebuild_failure_rolls_back_deletion(self):
         preview = self.preview()
         with patch('apps.experiments.assignment_return.prepare_participant', side_effect=RuntimeError('rebuild failed')):
@@ -242,6 +267,32 @@ class AssignmentReturnTests(StudentApiFixtureMixin, TestCase):
 
 class AssignmentReturnConcurrencyTests(StudentApiFixtureMixin, TransactionTestCase):
     prepared_paper_fixture = True
+
+    def test_expired_session_with_production_scale_failed_history(self):
+        from apps.analytics.models import ResearchSessionMaterialization as Materialization
+
+        self.assertEqual(self.start().status_code, 201)
+        session = ExperimentSession.objects.get(class_task=self.task, student=self.student)
+        ExperimentSession.objects.filter(pk=session.pk).update(status='expired', terminal_at=timezone.now())
+        Materialization.objects.bulk_create(
+            (Materialization(session=session, status='failed') for _ in range(22530)), batch_size=500)
+        Materialization.objects.bulk_create([
+            Materialization(session=session, status='succeeded', is_current=i == 2) for i in range(3)])
+        url = f'/api/v1/teacher/class-tasks/{self.task.pk}/participants/{session.participant_snapshot_id}/return/'
+        self.client.force_login(self.teacher)
+        preview = domain_payload(self.client.get(url))
+        self.assertEqual(preview['submission_count'], 0)
+        token = preview['confirmation_token']
+        for _ in range(180):
+            response = self.client.post(url, {'confirmation_token': token, 'allow_batches': True},
+                                        content_type='application/json')
+            if response.status_code != 202:
+                break
+            token = domain_payload(response)['confirmation_token']
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(domain_payload(response)['status'], 'not_started')
+        self.assertFalse(Materialization.objects.filter(session=session).exists())
+        self.assertEqual(AuditLog.objects.filter(action='experiment.student_session_reset').count(), 1)
 
     def test_two_confirmations_create_one_replacement_session(self):
         response = self.start()

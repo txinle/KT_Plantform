@@ -13,7 +13,7 @@ from apps.assessment.models import ExperimentSession, SessionSubmission
 from apps.assessment.prepared_services import prepare_participant
 from apps.audit.models import AuditLog
 from .models import ClassExperimentTask, Experiment, ExperimentVersionParticipantSnapshot
-from .research_deletion import _deletion_transaction, _purge_sessions
+from .research_deletion import _deletion_transaction, _purge_sessions, _remove_research_history
 
 
 SALT = 'student-assignment-return-v1'
@@ -65,7 +65,7 @@ def preview_assignment_return(*, task_id, participant_id, actor):
         'can_return': not reason, 'blocked_reason': reason, 'confirmation_token': token}
 
 
-def return_assignment(*, task_id, participant_id, actor, confirmation_token):
+def return_assignment(*, task_id, participant_id, actor, confirmation_token, allow_batches=False):
     task = _task(task_id, actor)
     try:
         confirmed = signing.loads(confirmation_token, salt=SALT, max_age=600)
@@ -74,7 +74,7 @@ def return_assignment(*, task_id, participant_id, actor, confirmation_token):
     if any(confirmed.get(key) != value for key, value in (
         ('actor', actor.pk), ('task', task_id), ('participant', participant_id))):
         raise ApiConflict('确认信息与当前学生不匹配，请重新核对。', code='RETURN_SCOPE_CHANGED')
-    request_hash = hashlib.sha256(confirmation_token.encode()).hexdigest()
+    request_hash = confirmed.get('request_hash') or hashlib.sha256(confirmation_token.encode()).hexdigest()
     with _deletion_transaction():
         course = lock_writable_course(task.experiment.course_id)
         require_course_manager(course, actor, capability='experiment')
@@ -92,6 +92,18 @@ def return_assignment(*, task_id, participant_id, actor, confirmation_token):
         if confirmed['state'] != _state(task, session):
             raise ApiConflict('该学生的作答或排期已变化，请重新选择学生并核对。', code='RETURN_SCOPE_CHANGED')
         old_id = session.pk
+        # Historical workers could accumulate thousands of unpublished failed
+        # jobs for one expired session. Drain them before touching live answers.
+        failed = ResearchSessionMaterialization.objects.filter(
+            session_id=old_id, status='failed', is_current=False, activated_at__isnull=True)
+        batch_size = 128
+        failed_ids = list(failed.order_by().values_list('pk', flat=True)[:batch_size + 1])
+        if len(failed_ids) > batch_size:
+            if not allow_batches:
+                raise ApiConflict('历史记录较多，请刷新页面后重新确认打回。', code='RETURN_BATCH_REQUIRED')
+            _remove_research_history(failed_ids[:batch_size], {})
+            next_token = signing.dumps({**confirmed, 'request_hash': request_hash}, salt=SALT, compress=True)
+            return {'status': 'cleaning_history', 'processed': batch_size, 'confirmation_token': next_token}
         old_order = list(session.assignments.order_by('assigned_sequence_index').values_list('snapshot_id', flat=True))
         counts = {}
         # Advance the locked course row so a concurrent repeatable-read export

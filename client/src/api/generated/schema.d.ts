@@ -3228,6 +3228,8 @@ export interface components {
         };
         AssignmentReturnInput: {
             confirmation_token: string;
+            /** @default false */
+            allow_batches: boolean;
         };
         AssignmentReturnPreview: {
             participant_id: number;
@@ -3240,6 +3242,16 @@ export interface components {
             blocked_reason: string;
             confirmation_token: string | null;
         };
+        AssignmentReturnProgress: {
+            status: components["schemas"]["AssignmentReturnProgressStatusEnum"];
+            processed: number;
+            confirmation_token: string;
+        };
+        /**
+         * @description * `cleaning_history` - cleaning_history
+         * @enum {string}
+         */
+        AssignmentReturnProgressStatusEnum: "cleaning_history";
         AssignmentReturnResult: {
             participant_id: number;
             session_id: number;
@@ -13623,6 +13635,19 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["AssignmentReturnResult"];
+                        meta: {
+                            request_id: string;
+                        };
+                    };
+                };
+            };
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AssignmentReturnProgress"];
                         meta: {
                             request_id: string;
                         };

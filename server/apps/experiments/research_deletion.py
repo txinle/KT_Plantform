@@ -194,10 +194,15 @@ def invalidate_draft_publication_previews(*, experiment_ids, reason, actor=None)
 
 
 def _raw_remove(queryset, counts):
-    count = queryset.count()
+    count = queryset._raw_delete(queryset.db)
     if count:
         counts[queryset.model._meta.label_lower] = counts.get(queryset.model._meta.label_lower, 0) + count
-        queryset._raw_delete(queryset.db)
+
+
+def _remove_research_history(materialization_ids, counts):
+    for model in (ResearchSessionResponse, ResearchSessionVisit, ResearchSessionBehavior, ResearchSessionQuality):
+        _raw_remove(model.objects.filter(materialization_id__in=materialization_ids), counts)
+    _raw_remove(ResearchSessionMaterialization.objects.filter(pk__in=materialization_ids), counts)
 
 
 def _coverage_runs(session_ids):
@@ -221,6 +226,17 @@ def _purge_sessions(session_ids, counts, coverage_run_ids=None):
         coverage_sessions = RecordingCoverageSession.objects.filter(run_id__in=coverage_run_ids)
     # All incoming runtime references are explicitly scoped to these sessions or
     # attempts. Shared schema/contract artifacts and student identities survive.
+    materializations = ResearchSessionMaterialization.objects.filter(session_id__in=session_ids)
+    if coverage_run_ids is None:
+        ids = list(materializations.order_by().values_list('pk', flat=True))
+        for start in range(0, len(ids), 128):
+            _remove_research_history(ids[start:start + 128], counts)
+        research = []
+    else:
+        research = [
+            model.objects.filter(materialization__session_id__in=session_ids)
+            for model in (ResearchSessionResponse, ResearchSessionVisit, ResearchSessionBehavior, ResearchSessionQuality)
+        ] + [materializations]
     querysets = [
         assessment.PreparedSessionArtifact.objects.filter(session_id__in=session_ids),
         assessment.PreparedAttemptProjection.objects.filter(attempt_id__in=attempt_ids),
@@ -228,11 +244,7 @@ def _purge_sessions(session_ids, counts, coverage_run_ids=None):
         assessment.SessionSubmission.objects.filter(session_id__in=session_ids),
         assessment.NavigationReceipt.objects.filter(attempt_id__in=attempt_ids),
         assessment.CaptureMutationReceipt.objects.filter(attempt_id__in=attempt_ids),
-        ResearchSessionResponse.objects.filter(materialization__session_id__in=session_ids),
-        ResearchSessionVisit.objects.filter(materialization__session_id__in=session_ids),
-        ResearchSessionBehavior.objects.filter(materialization__session_id__in=session_ids),
-        ResearchSessionQuality.objects.filter(materialization__session_id__in=session_ids),
-        ResearchSessionMaterialization.objects.filter(session_id__in=session_ids),
+        *research,
         coverage_attempts,
         coverage_sessions,
         experiments.ConditionAssignment.objects.filter(session_id__in=session_ids),

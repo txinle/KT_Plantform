@@ -24,6 +24,13 @@ class AssignmentReturnPreviewSerializer(serializers.Serializer):
 
 class AssignmentReturnInputSerializer(serializers.Serializer):
     confirmation_token = serializers.CharField(max_length=4096)
+    allow_batches = serializers.BooleanField(default=False)
+
+
+class AssignmentReturnProgressSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=['cleaning_history'])
+    processed = serializers.IntegerField()
+    confirmation_token = serializers.CharField()
 
 
 class AssignmentReturnResultSerializer(serializers.Serializer):
@@ -41,12 +48,13 @@ class TeacherAssignmentReturnView(APIView):
         return Response(preview_assignment_return(task_id=task_id, participant_id=participant_id, actor=request.user))
 
     @extend_schema(operation_id='teacher_assignment_return', request=AssignmentReturnInputSerializer,
-        responses=AssignmentReturnResultSerializer)
+        responses={200: AssignmentReturnResultSerializer, 202: AssignmentReturnProgressSerializer})
     def post(self, request, task_id, participant_id):
         serializer = AssignmentReturnInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            return Response(return_assignment(task_id=task_id, participant_id=participant_id, actor=request.user,
-                confirmation_token=serializer.validated_data['confirmation_token']))
+            result = return_assignment(task_id=task_id, participant_id=participant_id, actor=request.user,
+                **serializer.validated_data)
+            return Response(result, status=202 if result['status'] == 'cleaning_history' else 200)
         except DeletionConflict as exc:
             raise ApiConflict('相关记录正在处理，请稍后重新核对并打回。', code='RETURN_BUSY') from exc

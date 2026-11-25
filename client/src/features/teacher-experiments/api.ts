@@ -283,9 +283,9 @@ export function createTeacherExperimentApi(client: ApiClient) {
       return client.get<AssignmentReturnPreview>(`/api/v1/teacher/class-tasks/${taskId}/participants/${participantId}/return/`)
     },
     returnAssignment(taskId: number, participantId: number, confirmationToken: string) {
-      return client.mutate<components['schemas']['AssignmentReturnResult']>(
+      return client.mutate<components['schemas']['AssignmentReturnResult'] | components['schemas']['AssignmentReturnProgress']>(
         `/api/v1/teacher/class-tasks/${taskId}/participants/${participantId}/return/`,
-        { method: 'POST', body: { confirmation_token: confirmationToken } })
+        { method: 'POST', body: { confirmation_token: confirmationToken, allow_batches: true } })
     },
     task(taskId: number) {
       return client.get<ClassTask>(`/api/v1/teacher/class-tasks/${taskId}/`)

@@ -39,6 +39,25 @@ it('searches only the selected class and requires explicit confirmation before r
   wrapper.unmount()
 })
 
+it('continues cleanup without reporting success until the reset commits', async () => {
+  let finish!: (value: unknown) => void
+  api.returnAssignment.mockResolvedValueOnce({ status: 'cleaning_history', confirmation_token: 'next', processed: 128 })
+    .mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  const wrapper = mount(AssignmentReturnDialog, { props })
+  await flushPromises()
+  await wrapper.get('[data-return-select="101"]').trigger('click')
+  await flushPromises()
+  await wrapper.get('[data-return-confirm]').trigger('click')
+  await flushPromises()
+  expect(wrapper.emitted('returned')).toBeUndefined()
+  expect(api.returnAssignment).toHaveBeenLastCalledWith(31, 101, 'next')
+  expect(wrapper.text()).toContain('128')
+  finish({ status: 'not_started', session_id: 200, participant_id: 101 })
+  await flushPromises()
+  expect(wrapper.emitted('returned')).toHaveLength(1)
+  wrapper.unmount()
+})
+
 it('combines server-provided status filters with student search and resets pagination', async () => {
   const wrapper = mount(AssignmentReturnDialog, { props })
   await flushPromises()

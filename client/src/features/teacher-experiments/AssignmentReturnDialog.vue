@@ -15,6 +15,7 @@ const collection = ref<CollectionParticipantCollection>()
 const selected = ref<AssignmentReturnPreview>()
 const loading = ref(false)
 const sending = ref(false)
+const processed = ref(0)
 const error = ref('')
 const success = ref('')
 let requestId = 0
@@ -53,9 +54,18 @@ async function confirm() {
   const target = selected.value
   if (sending.value || !target?.can_return || !target.confirmation_token) return
   sending.value = true
+  processed.value = 0
   error.value = ''
   try {
-    await api.returnAssignment(props.task.id, target.participant_id, target.confirmation_token)
+    let token = target.confirmation_token
+    const activeRequest = requestId
+    while (activeRequest === requestId) {
+      const result = await api.returnAssignment(props.task.id, target.participant_id, token)
+      if (activeRequest !== requestId) return
+      if (result.status === 'not_started') break
+      processed.value += result.processed
+      token = result.confirmation_token
+    }
     success.value = `${target.display_name}（${target.student_number}）已恢复为未开始。请让学生刷新后从作业入口重新进入。`
     selected.value = undefined
     emit('returned')
@@ -75,6 +85,7 @@ onBeforeUnmount(() => { requestId++ })
       <p class="kt-picker-note">{{ task.class_name }} · 仅处理本次作业中选定学生的记录。</p>
       <p v-if="error" role="alert" class="kt-picker-error">{{ error }}</p>
       <p v-if="success" role="status" class="kt-return-success">{{ success }}</p>
+      <p v-if="sending && processed" role="status">已清理 {{ processed }} 条历史失败记录，正在继续处理。请保持页面打开。</p>
       <template v-if="selected">
         <div class="kt-return-person"><strong>{{ selected.display_name }}</strong><span>{{ selected.student_number }} · {{ selected.class_name }}</span></div>
         <template v-if="selected.can_return">

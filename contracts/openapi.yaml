@@ -10178,6 +10178,25 @@ paths:
                       request_id:
                         type: string
           description: ''
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AssignmentReturnProgress'
+                  meta:
+                    type: object
+                    required:
+                    - request_id
+                    properties:
+                      request_id:
+                        type: string
+          description: ''
   /api/v1/teacher/class-tasks/{task_id}/progress/:
     get:
       operationId: teacher_class_task_progress
@@ -17588,6 +17607,9 @@ components:
         confirmation_token:
           type: string
           maxLength: 4096
+        allow_batches:
+          type: boolean
+          default: false
       required:
       - confirmation_token
     AssignmentReturnPreview:
@@ -17622,6 +17644,24 @@ components:
       - question_count
       - student_number
       - submission_count
+    AssignmentReturnProgress:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/AssignmentReturnProgressStatusEnum'
+        processed:
+          type: integer
+        confirmation_token:
+          type: string
+      required:
+      - confirmation_token
+      - processed
+      - status
+    AssignmentReturnProgressStatusEnum:
+      enum:
+      - cleaning_history
+      type: string
+      description: '* `cleaning_history` - cleaning_history'
     AssignmentReturnResult:
       type: object
       properties:
