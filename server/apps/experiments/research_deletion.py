@@ -206,11 +206,19 @@ def _coverage_runs(session_ids):
     ).distinct().values_list("pk", flat=True))
 
 
-def _purge_sessions(session_ids, counts, coverage_run_ids):
+def _purge_sessions(session_ids, counts, coverage_run_ids=None):
     sessions = assessment.ExperimentSession.objects.select_for_update().filter(pk__in=session_ids).order_by("pk")
     list(sessions)
     attempts = assessment.Attempt.objects.select_for_update().filter(session_id__in=session_ids).order_by("pk")
     attempt_ids = list(attempts.values_list("pk", flat=True))
+    if coverage_run_ids is None:
+        # A participant reset retains the run's provenance for frozen exports
+        # and removes only coverage facts belonging to the replaced session.
+        coverage_attempts = RecordingCoverageAttempt.objects.filter(attempt_id__in=attempt_ids)
+        coverage_sessions = RecordingCoverageSession.objects.filter(session_id__in=session_ids)
+    else:
+        coverage_attempts = RecordingCoverageAttempt.objects.filter(run_id__in=coverage_run_ids)
+        coverage_sessions = RecordingCoverageSession.objects.filter(run_id__in=coverage_run_ids)
     # All incoming runtime references are explicitly scoped to these sessions or
     # attempts. Shared schema/contract artifacts and student identities survive.
     querysets = [
@@ -225,8 +233,8 @@ def _purge_sessions(session_ids, counts, coverage_run_ids):
         ResearchSessionBehavior.objects.filter(materialization__session_id__in=session_ids),
         ResearchSessionQuality.objects.filter(materialization__session_id__in=session_ids),
         ResearchSessionMaterialization.objects.filter(session_id__in=session_ids),
-        RecordingCoverageAttempt.objects.filter(run_id__in=coverage_run_ids),
-        RecordingCoverageSession.objects.filter(run_id__in=coverage_run_ids),
+        coverage_attempts,
+        coverage_sessions,
         experiments.ConditionAssignment.objects.filter(session_id__in=session_ids),
         assessment.ClientCaptureCheckpoint.objects.filter(session_id__in=session_ids),
         assessment.ResponseInputObservation.objects.filter(attempt_id__in=attempt_ids),
@@ -248,7 +256,7 @@ def _purge_sessions(session_ids, counts, coverage_run_ids):
                      assessment.StudentQuestionAssignment.objects.filter(session_id__in=session_ids),
                      assessment.ClientTimeSync.objects.filter(session_id__in=session_ids),
                      assessment.ExperimentSession.objects.filter(pk__in=session_ids),
-                     RecordingCoverageRun.objects.filter(pk__in=coverage_run_ids)]:
+                     RecordingCoverageRun.objects.filter(pk__in=coverage_run_ids or [])]:
         _raw_remove(queryset, counts)
 
 

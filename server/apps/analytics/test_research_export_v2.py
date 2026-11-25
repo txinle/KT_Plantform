@@ -566,6 +566,16 @@ class ResearchExportJobV2Tests(TestCase):
         self.assertEqual(response_rows[1][1:3], [self.student.student_number, self.student.shown_name])
         self.assertEqual(behavior_rows[1][1:3], [self.student.student_number, self.student.shown_name])
 
+    def test_worker_rejects_missing_frozen_session_data(self):
+        from .research_export_v2 import ResearchExportAssetError
+        from .services import claim_export_job, run_export_job
+
+        created = self.client.post(self.api("export-jobs/"), self.payload(), content_type="application/json")
+        self.assertEqual(created.status_code, 201, created.content)
+        self.materialization.delete()
+        with self.assertRaises(ResearchExportAssetError):
+            run_export_job(claim_export_job(worker_id="missing-frozen-session"))
+
     def test_later_materialization_does_not_change_frozen_export(self):
         from .services import claim_export_job, run_export_job
 

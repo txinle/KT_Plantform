@@ -1,9 +1,15 @@
+import csv
+import io
+import tempfile
+import zipfile
+from pathlib import Path
 from unittest.mock import patch
 from queue import Queue
 from threading import Barrier, Thread
 
-from django.db import close_old_connections
+from django.db import close_old_connections, connection
 from django.test import Client, TestCase, TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.accounts.models import User
@@ -109,6 +115,19 @@ class AssignmentReturnTests(StudentApiFixtureMixin, TestCase):
         self.assertFalse(preview['can_return'])
         self.assertIsNone(preview['confirmation_token'])
 
+    def test_started_student_with_zero_submissions_can_be_returned(self):
+        self.assertEqual(self.start(student=self.peer).status_code, 201)
+        participant = self.task.participant_snapshots.get(student=self.peer)
+        self.url = self.url.replace(f'/{self.participant.pk}/return/', f'/{participant.pk}/return/')
+        self.client.force_login(self.teacher)
+        preview = self.preview()
+        self.assertEqual(preview['submission_count'], 0)
+        response = self.execute(preview)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertFalse(self.preview()['can_return'])
+        self.assertTrue(ExperimentSession.objects.filter(
+            participant_snapshot=participant, status=ExperimentSession.Status.PREPARED).exists())
+
     def test_rebuild_failure_rolls_back_deletion(self):
         preview = self.preview()
         with patch('apps.experiments.assignment_return.prepare_participant', side_effect=RuntimeError('rebuild failed')):
@@ -130,16 +149,22 @@ class AssignmentReturnTests(StudentApiFixtureMixin, TestCase):
         self.client.force_login(self.teacher)
         return run, peer_run, peer, peer_attempt, snapshot, job
 
-    def test_return_clears_coverage_and_stale_export_but_preserves_peer_answers(self):
-        run, peer_run, peer, peer_attempt, snapshot, job = self.coverage_export()
+    def test_return_preserves_frozen_export_and_peer_coverage(self):
+        run, peer_run, peer, peer_attempt, _, job = self.coverage_export()
         preview = self.preview()
         self.assertTrue(preview['can_return'])
-        response = self.execute(preview)
+        with CaptureQueriesContext(connection) as queries:
+            response = self.execute(preview)
         self.assertEqual(response.status_code, 200, response.content)
+        for table in (ExportJob, ExportSnapshot):
+            self.assertFalse(any(table._meta.db_table in q['sql'] for q in queries))
         self.assertFalse(ExperimentSession.objects.filter(pk=self.session.pk).exists())
-        self.assertFalse(RecordingCoverageRun.objects.filter(pk=run.pk).exists())
-        self.assertFalse(ExportSnapshot.objects.filter(pk=snapshot.pk).exists())
-        self.assertFalse(ExportJob.objects.filter(pk=job.pk).exists())
+        self.assertTrue(ExportJob.objects.filter(pk=job.pk, snapshot__coverage_run=run,
+                                                 status=ExportJob.Status.SUCCEEDED).exists())
+        self.assertFalse(run.session_results.filter(session_id=self.session.pk).exists())
+        self.assertFalse(run.attempt_results.filter(attempt_id=self.attempt.pk).exists())
+        self.assertTrue(run.session_results.filter(session=peer).exists())
+        self.assertTrue(run.attempt_results.filter(attempt=peer_attempt).exists())
         self.assertTrue(RecordingCoverageRun.objects.filter(pk=peer_run.pk).exists())
         self.assertTrue(ExperimentSession.objects.filter(pk=peer.pk).exists())
         self.assertTrue(SubmissionEvent.objects.filter(attempt=peer_attempt).exists())
@@ -157,6 +182,62 @@ class AssignmentReturnTests(StudentApiFixtureMixin, TestCase):
         self.assertTrue(RecordingCoverageRun.objects.filter(pk=run.pk).exists())
         self.assertTrue(ExportSnapshot.objects.filter(pk=snapshot.pk).exists())
         self.assertTrue(ExportJob.objects.filter(pk=job.pk).exists())
+
+    def test_completed_export_download_survives_and_new_export_reads_reset_state(self):
+        from apps.analytics.research_materialization import (
+            claim_session_materialization, enqueue_session_materialization, run_session_materialization,
+        )
+        from apps.analytics.services import claim_export_job, run_export_job
+
+        finished_at = timezone.now()
+        ExperimentSession.objects.filter(pk=self.session.pk).update(
+            status=ExperimentSession.Status.COMPLETED, completed_at=finished_at, terminal_at=finished_at)
+
+        def materialize(session):
+            enqueue_session_materialization(session)
+            item = claim_session_materialization(worker_id='return-test')
+            result = run_session_materialization(item, worker_id='return-test')
+            self.assertEqual(result.status, result.Status.SUCCEEDED, result.error)
+
+        materialize(self.session)
+        endpoint = f'/api/v1/teacher/courses/{self.course.pk}/data/export-jobs/'
+        payload = {'package': 'experiment', 'confirm_identified': True,
+                   'scope': {'scope_version': 2, 'experiment_id': self.task.experiment_id, 'class_mode': 'all'}}
+
+        def export():
+            created = self.client.post(endpoint, payload, content_type='application/json')
+            self.assertEqual(created.status_code, 201, created.content)
+            job = run_export_job(claim_export_job(worker_id='return-test'))
+            return domain_payload(self.client.get(f'{endpoint}{job.pk}/'))['download_url']
+
+        def download(url):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200)
+            return b''.join(response.streaming_content)
+
+        def response_rows(content):
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                table = archive.read('05_单次实验_逐题作答表.csv').decode('utf-8-sig')
+                return list(csv.DictReader(io.StringIO(table)))
+
+        with tempfile.TemporaryDirectory() as media, self.settings(MEDIA_ROOT=Path(media)):
+            original_url = export()
+            original = download(original_url)
+            original_rows = response_rows(original)
+            self.assertIn('B', {row['最终答案'] for row in original_rows})
+            returned = self.execute(self.preview())
+            self.assertEqual(returned.status_code, 200, returned.content)
+            self.assertEqual(download(original_url), original)
+            self.assertEqual(response_rows(download(export())), [])
+            self.assertEqual(self.start().status_code, 201)
+            replacement = ExperimentSession.objects.get(class_task=self.task, student=self.student)
+            self.complete_session(replacement, answer='A')
+            materialize(replacement)
+            self.client.force_login(self.teacher)
+            rows = response_rows(download(export()))
+            self.assertEqual({row['最终答案'] for row in rows}, {'A'})
+            self.assertTrue({row['sessionID'] for row in rows}.isdisjoint(
+                row['sessionID'] for row in original_rows))
 
 
 class AssignmentReturnConcurrencyTests(StudentApiFixtureMixin, TransactionTestCase):

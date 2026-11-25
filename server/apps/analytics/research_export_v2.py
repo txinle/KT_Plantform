@@ -532,6 +532,12 @@ def materialize_research_export(job):
                 raise ResearchExportAssetError(
                     "冻结研究资产文件集合与契约不一致"
                 )
+        # A return can remove a frozen reference while the worker streams rows.
+        # Check after reading both fact tables, before publishing the archive.
+        for offset in range(0, len(materialization_ids), 1000):
+            batch = materialization_ids[offset:offset + 1000]
+            if ResearchSessionMaterialization.objects.filter(pk__in=batch).count() != len(batch):
+                raise ResearchExportAssetError("冻结的学生作答记录已清除，请按当前数据重新导出。")
         os.replace(temporary_path, artifact_path)
     finally:
         if os.path.exists(temporary_path):
